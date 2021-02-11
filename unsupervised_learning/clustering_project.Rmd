@@ -1,0 +1,217 @@
+---
+title: "clustering_project"
+author: "Konrad Lewszyk"
+date: "1/6/2021"
+output: html_document
+---
+
+```{r}
+install.packages("jpeg")
+install.packages("rasterImage")
+install.packages("imager")
+install.packages("factoextra")
+install.packages("flexclust")
+install.packages("fpc")
+install.packages("clustertend")
+install.packages("cluster")
+install.packages("ClusterR")
+install.packages("scatterplot3d")
+install.packages("rgl")
+install.packages("dbscan")
+install.packages("fpc")
+
+```
+
+
+```{r}
+library(jpeg)
+library(rasterImage)
+library(imager)
+library(cluster)
+library(factoextra)
+library(flexclust)
+library(fpc)
+library(clustertend)
+library(cluster)
+library(ClusterR)
+library(tidyverse)
+library(scatterplot3d)
+library(rgl)
+library(dbscan)
+
+```
+
+```{r}
+names <- c("mona_lisa.jpg", "girl_with_pearl_earring.jpg", "wanderer.jpg", "the_fighting_temaraire.jpg",
+           "starry_night.jpg", "marilyn_monroe.jpg", "fangor_2.jpg", "fangor_3.jpg")
+
+```
+
+
+```{r}
+par(mfrow = c(2,4))
+for (name in names){
+  image <- load.image(name)
+plot(image, axes = FALSE)
+}
+```
+
+```{r}
+rgb_modifier <- function(painting){
+  image <- readJPEG(painting)
+  dim <- dim(image)
+  dataframe <- data.frame(x = rep(1:dim[2], each = dim[1]),
+                          y = rep(dim[1]:1, dim[2]),
+                          red = as.vector(image[,,1]),
+                          green = as.vector(image[,,2]),
+                          blue = as.vector(image[,,3]))
+}
+```
+
+
+```{r}
+mona_lisa <- rgb_modifier("mona_lisa.jpg")
+girl_with_pearl_earring <- rgb_modifier("girl_with_pearl_earring.jpg")
+wanderer_above_sea_of_clouds <- rgb_modifier("wanderer.jpg")
+the_fighting_temaraire <- rgb_modifier("the_fighting_temaraire.jpg")
+the_starry_night <- rgb_modifier("starry_night.jpg")
+marilyn_monroe <- rgb_modifier("marilyn_monroe.jpg")
+fangor_1 <- rgb_modifier("fangor_2.jpg")
+fangor_2 <- rgb_modifier("fangor_3.jpg")
+rgb_images <- list(mona_lisa, girl_with_pearl_earring, wanderer_above_sea_of_clouds,
+                   the_fighting_temaraire, the_starry_night, marilyn_monroe, fangor_1, fangor_2)
+```
+
+
+```{r}
+optimizer <- function(painting){
+  clusters <- c()
+  for (i in 1:10){
+    cluster <- clara(painting[,c("red", "green", "blue")], i)
+    clusters[i] <- cluster$silinfo$avg.width
+  }
+  return(clusters)
+}
+```
+
+
+
+
+```{r}
+mona_lisa_clusters <- optimizer(mona_lisa)
+girl_with_pearl_earring_clusters <- optimizer(girl_with_pearl_earring)
+wanderer_above_sea_of_clouds_clusters <- optimizer(wanderer_above_sea_of_clouds)
+the_fighting_temaraire_clusters <- optimizer(the_fighting_temaraire)
+the_starry_night_clusters <-optimizer(the_starry_night)
+marilyn_monroe_clusters <- optimizer(marilyn_monroe)
+fangor_1_clusters <- optimizer(fangor_1)
+fangor_2_clusters <- optimizer(fangor_2)
+```
+
+```{r}
+short_names <- substr(names, 1, nchar(names) -4)
+clusters <- list(mona_lisa_clusters, girl_with_pearl_earring_clusters,wanderer_above_sea_of_clouds_clusters,
+              the_fighting_temaraire_clusters, the_starry_night_clusters, marilyn_monroe_clusters,
+              fangor_1_clusters, fangor_2_clusters)
+
+```
+
+
+
+```{r}
+i = 1 
+optimal_cluster_number <- c()
+for (cluster in clusters){
+  plot(cluster, type = "l", main = short_names[i], col = "navyblue")
+  abline(h=seq(1:20)/20, lty=1, col="grey")
+  points(cluster, pch = 21, bg = "red")
+  optimal_cluster_number[i] = which.max(cluster)
+  i = i + 1
+}
+```
+
+
+```{r}
+i = 1
+for (painting in rgb_images){
+plot(silhouette(clara(painting[,3:5], optimal_cluster_number[i])), main = short_names[i])
+i = i + 1
+}
+```
+
+
+```{r}
+i = 1
+dominant_colors <- list()
+for (painting in rgb_images){
+  clara <- clara(painting[,3:5], optimal_cluster_number[i])
+  colors <- rgb(clara$medoids[clara$clustering, ])
+  plot(painting$y~painting$x, col = colors, asp = 1)
+  dominant_colors[[i]] <- rgb(clara$medoids)
+  i = i + 1
+}
+```
+
+
+```{r}
+i = 1
+for (painting in rgb_images){
+  clara <- clara(painting[,3:5], optimal_cluster_number[i])
+  df <- data.frame(table(rgb(clara$medoids[clara$clustering,])))
+  df$percentage <- df$Freq/sum(df$Freq)*100
+  pie(df$percentage, col = as.character(df$Var1))
+  i = i + 1
+}
+```
+
+```{r}
+i = 1
+for (painting in rgb_images){
+  clara <- clara(painting[,3:5], optimal_cluster_number[i])
+  df <- data.frame(t(col2rgb(rgb(clara$medoids))))
+  plot3d(x = df$red, y = df$green, z = df$blue, type = "s",
+         xlab = "red", ylab = "green", zlab = "blue", col = rgb(clara$medoids),
+         main = short_names[i])
+  i = i + 1
+  Sys.sleep(5)
+}
+```
+
+
+```{r}
+#let's try fangor paintings with dbscan
+names <- c("fangor_2.jpg", "fangor_3.jpg")
+```
+
+
+```{r}
+dbscan_optimizer <- function(painting){
+  clusters <- c()
+  for (i in 1:10){
+    cluster <- dbscan(painting[,c("red", "green", "blue")], minPts = 5, eps = 7, search = "kdtree",
+                      weights = NULL)
+    clusters[i] <- cluster$silinfo$avg.width
+  }
+  return(clusters)
+}
+```
+
+
+```{r}
+dbscan(fangor_1[,c("red", "green", "blue")], minPts = 5, eps = 7, search = "kdtree",
+                      weights = NULL)
+#fangor_1_clusters <- dbscan_optimizer(fangor_1)
+#fangor_2_clusters <- dbscan_optimizer(fangor_2)
+```
+
+
+
+
+
+
+
+
+
+
+
+
