@@ -1,0 +1,215 @@
+---
+title: "konrad_lewszyk_dimension_reduction"
+author: "Konrad Lewszyk"
+date: "1/11/2021"
+output: html_document
+---
+```{r}
+install.packages("gridExtra")
+install.packages("ggpubr")
+install.packages("raster")
+install.packages("abind")
+install.packages("magick")
+```
+
+
+```{r}
+library(jpeg)
+library(rasterImage)
+library(imager)
+library(cluster)
+library(factoextra)
+library(flexclust)
+library(fpc)
+library(clustertend)
+library(cluster)
+library(ClusterR)
+library(tidyverse)
+library(scatterplot3d)
+library(rgl)
+library(dbscan)
+library(gridExtra)
+library(ggplot2)
+library(raster)
+library(abind)
+library(magick)
+```
+
+```{r}
+names <- c("marilyn_monroe.jpg", "mona_lisa.jpg")
+```
+
+```{r}
+short_names <- substr(names, 1, nchar(names) - 4)
+```
+
+```{r}
+par(mfrow = c(2,4))
+for (name in names){
+  image <- load.image(name)
+plot(image, axes = FALSE)
+}
+```
+```{r}
+par(mfrow = c(1,3))
+for (name in names){
+  image <- readJPEG(name)
+  red <- image[,,1]
+  green <- image[,,2]
+  blue <- image[,,3]
+  
+  plot(raster(red), axes = FALSE, main = "red")
+  plot(raster(green), axes = FALSE, main = "green")
+  plot(raster(blue), axes = FALSE, main = "blue")
+}
+```
+
+```{r}
+par(mfrow = c(1,3))
+for (name in names){
+  image <- load.image(name)
+  G(image) <- 0
+  B(image) <- 0
+  plot(image, axes = FALSE)
+  
+  image <- load.image(name)
+  R(image) <- 0
+  B(image) <- 0
+  plot(image, axes = FALSE)
+  
+  image <- load.image(name)
+  R(image) <- 0
+  G(image) <- 0
+  plot(image, axes = FALSE)
+  
+}
+```
+
+
+```{r}
+setClass("painting", slots = c(name = "character", red_pca = "ANY", green_pca = "ANY",
+                               blue_pca = "ANY"))
+```
+
+```{r}
+pca_modifier <- function(name){
+  new("painting", name = substr(name, 1, nchar(name) - 4), 
+            red_pca = prcomp(readJPEG(name)[,,1], center = FALSE),
+            green_pca = prcomp(readJPEG(name)[,,2], center = FALSE),
+            blue_pca = prcomp(readJPEG(name)[,,3], center = FALSE)
+      )
+}
+```
+
+```{r}
+marilyn_monroe_pca <- pca_modifier("marilyn_monroe.jpg")
+mona_lisa_pca <- pca_modifier("mona_lisa.jpg")
+pca_paintings <- list(marilyn_monroe_pca, mona_lisa_pca)
+```
+
+```{r}
+par(mfrow = c(2,3))
+for (painting in pca_paintings){
+  red_eigenvalues <- fviz_eig(slot(painting, "red_pca"), 
+                              main = paste(slot(painting, "name"), "red"), 
+                              barfill = rgb(1,0,0, alpha = 0.3), barcolor = "black")
+  green_eigenvalues <- fviz_eig(slot(painting, "green_pca"), 
+                              main = paste(slot(painting, "name"), "green"), 
+                              barfill = rgb(0.1,0.7,0.1, alpha = 0.4), barcolor = "black")
+  blue_eigenvalues <- fviz_eig(slot(painting, "blue_pca"), 
+                              main = paste(slot(painting, "name"), "blue"), 
+                              barfill = rgb(0,0,1, alpha = 0.3), barcolor = "black")
+  
+  grid.arrange(red_eigenvalues, green_eigenvalues, blue_eigenvalues, 
+               ncol = 3)
+  
+  
+}
+```
+
+```{r}
+for (painting in pca_paintings){
+  x <- summary(slot(painting, "red_pca"))$importance[3,]
+  y <- summary(slot(painting, "green_pca"))$importance[3,]
+  z <- summary(slot(painting, "blue_pca"))$importance[3,]
+  
+  df <- data.frame("red" = x,"green" = y,"blue" = z)
+  df <- head(df, 500)
+  df$index = index = c(1:500)
+  
+  g <- ggplot() +
+    geom_line(data = df, aes(x = index, y = red), col = "red", size = 1) +
+    geom_line(data = df, aes(x = index, y = green), col = "darkgreen", size = 1) +
+    geom_line(data = df, aes(x = index, y = blue), col = "steelblue", size = 1) +
+    ylab("cumulative variance by color") +
+    xlab("number of principal components") +
+    theme_bw() +
+    ggtitle(slot(painting, "name"))
+  print(g)
+}
+```
+```{r}
+size_dataframe <- data.frame()
+for (name in names) {
+  
+}
+```
+
+
+```{r}
+reconstructer <- function(painting, component) {
+  reconstruction <- abind(slot(painting, "red_pca")$x[,1:component] %*% 
+                            t(slot(painting, "red_pca")$rotation[,1:component]),
+                          slot(painting, "green_pca")$x[,1:component] %*% 
+                            t(slot(painting, "green_pca")$rotation[,1:component]),
+                          slot(painting, "blue_pca")$x[,1:component] %*%
+                            t(slot(painting, "blue_pca")$rotation[,1:component]),
+                          along = 3)
+  
+  plot(image_read(reconstruction))
+  title(paste(as.character(component), "components"))
+}
+```
+
+```{r}
+reconstruction
+
+```
+
+
+```{r}
+par(mfrow = c(2,3))
+for (painting in pca_paintings) {
+  for (i in 1:6) {
+  reconstructer(painting, 2**i)
+  }
+}
+```
+
+```{r}
+mona_lisa_reconstruction <- (writeJPEG(reconstruction, "mona_lisa_reconstruction.jpg"))
+file.info("mona_lisa_reconstruction.jpg")$size
+load.image("mona_lisa_reconstruction.jpg")
+```
+
+
+
+
+
+
+```{r}
+file.info("marilyn_monroe.jpg")$size
+```
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
