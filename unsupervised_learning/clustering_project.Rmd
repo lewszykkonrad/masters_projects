@@ -2,7 +2,9 @@
 title: "clustering_project"
 author: "Konrad Lewszyk"
 date: "1/6/2021"
-output: rmarkdown::github_document
+output: 
+  html_document:
+    keep_md: true
 ---
 
 ```{r}
@@ -17,7 +19,6 @@ install.packages("cluster")
 install.packages("ClusterR")
 install.packages("scatterplot3d")
 install.packages("rgl")
-install.packages("dbscan")
 install.packages("fpc")
 
 ```
@@ -37,11 +38,11 @@ library(ClusterR)
 library(tidyverse)
 library(scatterplot3d)
 library(rgl)
-library(dbscan)
-
 ```
 
 ```{r}
+#in this prject we will explore how clustering works on images. I selected paintings representative of 
+#art periods. Clustering will reveal which art styles are the easiest for the computer to analyze
 names <- c("mona_lisa.jpg", "girl_with_pearl_earring.jpg", "wanderer.jpg", "the_fighting_temaraire.jpg",
            "starry_night.jpg", "marilyn_monroe.jpg", "fangor_2.jpg", "fangor_3.jpg")
 
@@ -49,6 +50,7 @@ names <- c("mona_lisa.jpg", "girl_with_pearl_earring.jpg", "wanderer.jpg", "the_
 
 
 ```{r}
+#displaying the paintings
 par(mfrow = c(2,4))
 for (name in names){
   image <- load.image(name)
@@ -57,6 +59,9 @@ plot(image, axes = FALSE)
 ```
 
 ```{r}
+# we need to convert the jPEG format to three matrices, one for each color of pixel display - red, 
+# green and blue. We specify a function that will convert the painting to the format appropriate
+# for the clustering algorithms
 rgb_modifier <- function(painting){
   image <- readJPEG(painting)
   dim <- dim(image)
@@ -70,6 +75,7 @@ rgb_modifier <- function(painting){
 
 
 ```{r}
+# converting the images to rgb format and putting them together in a list
 mona_lisa <- rgb_modifier("mona_lisa.jpg")
 girl_with_pearl_earring <- rgb_modifier("girl_with_pearl_earring.jpg")
 wanderer_above_sea_of_clouds <- rgb_modifier("wanderer.jpg")
@@ -84,6 +90,7 @@ rgb_images <- list(mona_lisa, girl_with_pearl_earring, wanderer_above_sea_of_clo
 
 
 ```{r}
+# Here we create a function that returns a cluster object
 optimizer <- function(painting){
   clusters <- c()
   for (i in 1:10){
@@ -109,6 +116,8 @@ fangor_2_clusters <- optimizer(fangor_2)
 ```
 
 ```{r}
+# we derive the names of paintings for plot naming purposes, and grouping the cluster objects
+# in a list
 short_names <- substr(names, 1, nchar(names) -4)
 clusters <- list(mona_lisa_clusters, girl_with_pearl_earring_clusters,wanderer_above_sea_of_clouds_clusters,
               the_fighting_temaraire_clusters, the_starry_night_clusters, marilyn_monroe_clusters,
@@ -119,6 +128,8 @@ clusters <- list(mona_lisa_clusters, girl_with_pearl_earring_clusters,wanderer_a
 
 
 ```{r}
+# what we want know is to find the number of clusters optimal for each painting. For example, for mona_lisa
+# we can see that with two clusters, we score the highest silhouette width, so we go with 2
 i = 1 
 optimal_cluster_number <- c()
 for (cluster in clusters){
@@ -132,6 +143,7 @@ for (cluster in clusters){
 
 
 ```{r}
+# now we display the average silhouette scores with the optimal cluster number for each painting
 i = 1
 for (painting in rgb_images){
 plot(silhouette(clara(painting[,3:5], optimal_cluster_number[i])), main = short_names[i])
@@ -141,6 +153,15 @@ i = i + 1
 
 
 ```{r}
+#finally, we can present the paintings using the optimal number of clusters, and we can quickly
+# draw some conclusions based on the results. Let's take a look at a more modern era painting, 
+# Marilyn Monroe by Andy Warhol. We used 5 clusters, and the painting is practically 
+# indistinguuishable from the original. But if we look at the impressionistic Fighting Temaraire
+# by William Turner, we can see a much downgraded image, which makes sense since the painting has 
+# only 0.46 average silhouette score. We can conclude that for clustering, a well defined and clearly
+# outlined colors work better than more transitive coloring. Interestingly, the algorithm has 
+#practically ignored the transitive parts of Fangor's circly paitnings, which are the essence of the
+#paintings and what makes them great to look at.
 i = 1
 dominant_colors <- list()
 for (painting in rgb_images){
@@ -154,6 +175,7 @@ for (painting in rgb_images){
 
 
 ```{r}
+#We can also display what colors make up each cluster and what is the prevalence of each color 
 i = 1
 for (painting in rgb_images){
   clara <- clara(painting[,3:5], optimal_cluster_number[i])
@@ -165,6 +187,7 @@ for (painting in rgb_images){
 ```
 
 ```{r}
+#lastly we can display in 3d there each of the colors lay
 i = 1
 for (painting in rgb_images){
   clara <- clara(painting[,3:5], optimal_cluster_number[i])
@@ -178,31 +201,13 @@ for (painting in rgb_images){
 ```
 
 
-```{r}
-#let's try fangor paintings with dbscan
-names <- c("fangor_2.jpg", "fangor_3.jpg")
-```
 
 
-```{r}
-dbscan_optimizer <- function(painting){
-  clusters <- c()
-  for (i in 1:10){
-    cluster <- dbscan(painting[,c("red", "green", "blue")], minPts = 5, eps = 7, search = "kdtree",
-                      weights = NULL)
-    clusters[i] <- cluster$silinfo$avg.width
-  }
-  return(clusters)
-}
-```
 
 
-```{r}
-dbscan(fangor_1[,c("red", "green", "blue")], minPts = 5, eps = 7, search = "kdtree",
-                      weights = NULL)
-#fangor_1_clusters <- dbscan_optimizer(fangor_1)
-#fangor_2_clusters <- dbscan_optimizer(fangor_2)
-```
+
+
+
 
 
 

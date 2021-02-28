@@ -36,10 +36,15 @@ library(magick)
 ```
 
 ```{r}
-names <- c("marilyn_monroe.jpg", "mona_lisa.jpg")
+#in this project we continue analysis of the paintings. This time we will be reconstructing
+# the paintings using less dimensions, or in other words, we will try to reduce the size of the
+# image while preserving its quality
+names <- c("mona_lisa.jpg", "girl_with_pearl_earring.jpg", "wanderer.jpg", "the_fighting_temaraire.jpg",
+           "starry_night.jpg", "marilyn_monroe.jpg", "fangor_2.jpg", "fangor_3.jpg")
 ```
 
 ```{r}
+#obtaining names of paintings for convenience
 short_names <- substr(names, 1, nchar(names) - 4)
 ```
 
@@ -51,6 +56,9 @@ plot(image, axes = FALSE)
 }
 ```
 ```{r}
+# The reduction of dimensionality will occur on each of the three dimensions - red, green and blue.
+#Here we can see the intensity, or saturation of each color on the painting. The greener, the more
+#intense/saturated the area
 par(mfrow = c(1,3))
 for (name in names){
   image <- readJPEG(name)
@@ -65,6 +73,8 @@ for (name in names){
 ```
 
 ```{r}
+#We can also display the images in red, green and blue and see which color preserves the paiting
+# the most
 par(mfrow = c(1,3))
 for (name in names){
   image <- load.image(name)
@@ -87,11 +97,13 @@ for (name in names){
 
 
 ```{r}
+# to avoid redundancy, we will create a painting class
 setClass("painting", slots = c(name = "character", red_pca = "ANY", green_pca = "ANY",
                                blue_pca = "ANY"))
 ```
 
 ```{r}
+# here we create a function that will perform pca() on every dimension of the painting
 pca_modifier <- function(name){
   new("painting", name = substr(name, 1, nchar(name) - 4), 
             red_pca = prcomp(readJPEG(name)[,,1], center = FALSE),
@@ -104,10 +116,20 @@ pca_modifier <- function(name){
 ```{r}
 marilyn_monroe_pca <- pca_modifier("marilyn_monroe.jpg")
 mona_lisa_pca <- pca_modifier("mona_lisa.jpg")
-pca_paintings <- list(marilyn_monroe_pca, mona_lisa_pca)
+wanderer_pca <- pca_modifier("wanderer.jpg")
+fighting_temaraire_pca <- pca_modifier("the_fighting_temaraire.jpg")
+starry_night_pca <- pca_modifier("starry_night.jpg")
+girl_pca <- pca_modifier("girl_with_pearl_earring.jpg")
+fangor_1_pca <- pca_modifier("fangor_2.jpg")
+fangor_2_pca <- pca_modifier("fangor_3.jpg")
+pca_paintings <- list(marilyn_monroe_pca, mona_lisa_pca, wanderer_pca, fighting_temaraire_pca,
+                      starry_night_pca, girl_pca, fangor_1_pca, fangor_2_pca)
 ```
 
 ```{r}
+#We can explore each color, and how many dimensions explain how much variance. Ideally, we want the
+# least amount of dimensions, but dimensions that explain the most variance, aka represent the data
+# with least lostt of quality
 par(mfrow = c(2,3))
 for (painting in pca_paintings){
   red_eigenvalues <- fviz_eig(slot(painting, "red_pca"), 
@@ -128,6 +150,9 @@ for (painting in pca_paintings){
 ```
 
 ```{r}
+# display the performance of each color. Interstingly, mona lisa looked undoubtedly the worst in
+# blue, and if we look at the graph, blue color needs a lot more components to reach the same
+# level of variance that red and green reach
 for (painting in pca_paintings){
   x <- summary(slot(painting, "red_pca"))$importance[3,]
   y <- summary(slot(painting, "green_pca"))$importance[3,]
@@ -148,15 +173,11 @@ for (painting in pca_paintings){
   print(g)
 }
 ```
-```{r}
-size_dataframe <- data.frame()
-for (name in names) {
-  
-}
-```
 
 
 ```{r}
+# now we create a reconstructing function, that will display the paintings but using 
+# principal components
 reconstructer <- function(painting, component) {
   reconstruction <- abind(slot(painting, "red_pca")$x[,1:component] %*% 
                             t(slot(painting, "red_pca")$rotation[,1:component]),
@@ -172,12 +193,7 @@ reconstructer <- function(painting, component) {
 ```
 
 ```{r}
-reconstruction
-
-```
-
-
-```{r}
+# we can see that just with 32 components, the paintings are practically the same. 
 par(mfrow = c(2,3))
 for (painting in pca_paintings) {
   for (i in 1:6) {
@@ -187,26 +203,33 @@ for (painting in pca_paintings) {
 ```
 
 ```{r}
-mona_lisa_reconstruction <- (writeJPEG(reconstruction, "mona_lisa_reconstruction.jpg"))
-file.info("mona_lisa_reconstruction.jpg")$size
-load.image("mona_lisa_reconstruction.jpg")
+#what about the size of the file?
+for (painting in pca_paintings) {
+reconstruction <- abind(slot(painting, "red_pca")$x[,1:32] %*% 
+                            t(slot(painting, "red_pca")$rotation[,1:32]),
+                          slot(painting, "green_pca")$x[,1:32] %*% 
+                            t(slot(painting, "green_pca")$rotation[,1:32]),
+                          slot(painting, "blue_pca")$x[,1:32] %*%
+                            t(slot(painting, "blue_pca")$rotation[,1:32]),
+                          along = 3)
+
+
+mona_lisa_reconstruction <- (writeJPEG(reconstruction, "placeholder.jpg"))
+print(file.info("placeholder.jpg")$size)
+}
 ```
-
-
-
-
 
 
 ```{r}
-file.info("marilyn_monroe.jpg")$size
+for (name in names) {
+print(file.info(name)$size)
+}
 ```
+
 
 ```{r}
-
+#We can see that for the most part, the sizes of the files have been largely reduced
 ```
-
-
-
 
 
 

@@ -1,0 +1,187 @@
+---
+title: "movie_association_rule_mining"
+author: "Konrad Lewszyk"
+date: "2/24/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+install.packages("arules")
+install.packages("arulesViz")
+install.packages("tidyverse")
+
+library(arules)
+library(dplyr)
+library(tidyr)
+library(arulesViz)
+library(tidyverse)
+```
+
+```{r}
+#For the Association Rule Mining project I will focus on movie recommendations. Based on the 
+#movies users have seen and the ratings they have given we willbe able to determine what 
+#kind of movies they might enjoy to watch next. The dataset we are using is called MovieLens, and 
+#it's one of the most popular and up-to-date databases on movies
+movies <- read.csv("movies.csv")
+ratings <- read.csv("ratings.csv")
+
+show(str(movies))
+show(head(movies))
+```
+
+
+```{r}
+# we will filter the movies to obtain a more modern dataset, to make the task easier for my computer. I 
+# will choose movies released after the year 2009
+movies$year <- as.numeric(substr(movies$title, nchar(movies$title) - 4, nchar(movies$title) - 1))
+movies %>% drop_na()
+movies <- movies %>% filter(year > 2009)
+movies$movieId <- as.factor(movies$movieId)
+```
+
+```{r}
+show(str(ratings))
+show(head(movies))
+```
+
+```{r}
+#We have timestamp variable in the ratings, but we won't be analyzing time series here, so we don't need
+#it. Additionally, our goal is to suggest movies that an individual will enjoy for the most part. That's why
+#I will modify the dataset to show movies with an average rating above 3.49/5, so 7/10 and above. 
+ratings$timestamp <- NULL
+avg_rating <- ratings %>% group_by(movieId) %>% summarise(avg_rating = round(mean(rating),2))
+ratings <- inner_join(ratings, avg_rating, by = "movieId")
+ratings <- ratings %>% filter((avg_rating > 3.49) & (movieId %in% movies$movieId))
+ratings$movieId <- as.factor(ratings$movieId)
+```
+
+
+```{r}
+#now we will join the movies and the ratings dataset together to obtain the userid and all the titles
+# he or she has seen
+full_data <-inner_join(movies, ratings, by = 'movieId')
+full_data$title <- substr(full_data$title, 0, nchar(full_data$title)-7)
+full_data$genres <- tolower(full_data$genres)
+```
+
+```{r}
+#selecting specific genre. This will help us avoid situations in which antecedent movies recommend a consequent movie of completely different topicality. For now the only indicators we will base our recommendations on are the ratings and the frequency. This means that you could get Schindler's List recommended because you watched Shrek.
+
+#the available genres
+print(unique(unlist(str_split(unique(full_data$genres), "\\|"))))
+
+unique_genres <- unlist(unique(full_data$genres))
+
+#so let's explore the animation genre, since it will be one of the easier ones to visualize
+# due to smaller size of the sample
+genre_matrix <- str_detect("animation", unique_genres)
+genre_list <- unique_genres[genre_matrix]
+
+animation_data <- full_data %>% filter(genres %in% genre_list)
+```
+
+
+```{r}
+#now we split the data so display the 'buckets' of films particular users have seen, and then we use the
+#arules package to transform our data into association rule mining format that will allow us to perform
+#the apriori algorithm
+id_views <- split(animation_data$title, animation_data$userId)
+matrix <- as(id_views, "transactions")
+```
+
+
+```{r}
+#Item frequency allows us to view the support of each movie, in relative - percentage, and absolute way
+itemFrequency(matrix, type="relative")[1:5]
+itemFrequency(matrix, type="absolute")[1:5]
+
+#here we can look at some sample bundles of movies seen by users
+inspect(matrix[1:5])
+
+#we can also look which movies were the most popular
+itemFrequencyPlot(matrix, topN = 15)
+
+#for the apriori I am choosing rather high support and confidence, which narrows down the data, but 
+#it also provides more validity in the recommendations. The minlen and maxlen setting allows for
+#choosing the size of the antecedent. I don't want recommendations to be based off of a single movie, nor 
+#do I want bundles too large, because those can get pretty heavy for computing
+movie_rules <- apriori(matrix, parameter = list(support = 0.05, confidence = 0.8, minlen = 3, maxlen = 5))
+```
+
+
+
+```{r}
+#summary of the Apriori algorithm result  
+summary(movie_rules)
+
+#sample antecedent - consequent relationships, aka the movies recommendations
+inspect(head(movie_rules, 5))
+
+#we can inspect which bundles of movie antecedent - consequent relationships are the highest in terms of the
+#lift support and count(frequency)
+inspect(sort(movie_rules, by = "lift")[1:5])
+inspect(sort(movie_rules, by = "support")[1:5])
+inspect(sort(movie_rules, by = "count")[1:5])
+
+```
+
+```{r}
+#let's explore a particular movie, zootopia. Here we set the rhs to zootopia, which means we will
+#look at which movies will lead to recommending zootopia as your next movie
+zootopia_rules <-apriori(data = matrix, parameter=list(supp=0.05,conf = 0.2, minlen = 3, maxlen = 5), 
+appearance=list(default="lhs", rhs="Zootopia"), control=list(verbose=F))
+
+#sample recommendations
+inspect(zootopia_rules[1:10])
+
+zootopia_rules_by_confidence <- sort(zootopia_rules, by="confidence", decreasing=TRUE)
+inspect(head(zootopia_rules_by_confidence, 5))
+```
+
+```{r}
+# we can also discover what kind of recommendations a particular bundle of movies will yield
+multiple_rules <-apriori(data = matrix, parameter=list(supp=0.02,conf = 0.2, minlen = 3, maxlen = 5), 
+appearance=list(default="rhs", 
+                lhs=list("Zootopia", "Sausage Party", "How to Train Your Dragon")), 
+                  control=list(verbose=F))
+
+inspect(tail(multiple_rules))
+```
+
+```{r}
+# finally, we are also able to explore suggestions where a movie title occurs in the antecedent
+# and the consequent, so how a particular movie affects the entire recommendation ecosystem
+frozen_rules <- subset(movie_rules, items %in% "Frozen")
+inspect(head(frozen_rules))
+```
+
+```{r}
+#we can visualize how the recommendation system works, and what is the significance
+#of particular recommendations
+
+# We can display the rules/recommendations in three dimensions. The redder and the higher and 
+#more to the right, the stronger the recommendation. We can display the data in a variety of ways.
+plot(zootopia_rules)
+```
+```{r, fig.width= 10, fig.height=7}
+#if we set the method to 'grouped', that way we can see the significance of particular set of bundles
+# and recommendation rules assciated with them
+plot(zootopia_rules, method="grouped")
+```
+
+```{r}
+#graph method allows us to see a mapping of the recommendations with two dimensions:size and support
+#and lift and the intensity of the color
+plot(zootopia_rules, method="graph", max = 10)
+```
+
+
+```{r}
+#paracoord allows us to see sort of a network of the recommendations, and how they follow up
+#to the movie that we are inspecting
+plot(zootopia_rules, method="paracoord", max = 10)
+```
+
+
+
+
