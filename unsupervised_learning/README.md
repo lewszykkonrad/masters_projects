@@ -1,1 +1,1 @@
-Hello. These projects are still in progress.
+Hello. These are my finished projects for unsupervised learning.
