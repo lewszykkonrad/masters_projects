@@ -1,0 +1,1282 @@
+---
+title: "US Births - Classification"
+author: "Aleksandra Tomczak, Konrad Lewszyk"
+date: "5/25/2021"
+output: 
+  html_document: 
+    theme: journal
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: yes
+---
+![](hif-maternity-cover.png)
+
+```{r setup, include = FALSE, echo = FALSE}
+
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+
+options(contrasts = c("contr.treatment", "contr.treatment"))
+```
+
+```{r package installation, include = FALSE, echo = FALSE}
+
+requiredPackages = c('caret','dplyr','tibble','purrr','corrplot', 'data.table', 'DescTools', 'AER', 'lmtest', 'pROC', 'olsrr', 'nnet', 'naivebayes', 'rpart.plot')
+for(i in requiredPackages){if(!require(i,character.only = TRUE)) install.packages(i)}
+for(i in requiredPackages){if(!require(i,character.only = TRUE)) library(i,character.only = TRUE) }
+```
+
+```{r libraries import, include = FALSE, echo = FALSE}
+
+library(caret)
+library(dplyr)
+library(tibble)
+library(purrr)
+library(corrplot)
+library(data.table)
+library(readr)
+library(ggplot2)
+library(ggpubr)
+library(DescTools)
+library(glmnet)
+library(AER)
+library(lmtest)
+library(pROC)
+library(janitor)
+library(MASS)
+library(nnet)
+library(naivebayes)
+library(rpart)
+library(rpart.plot)
+```
+
+For this project we have chosen a dataset about the child birth in United States in the year of 2018 available at [Kaggle](https://www.kaggle.com/des137/us-births-2018) obtained from raw data from [CDC website](https://www.cdc.gov/nchs/data_access/vitalstatsonline.htm#Tools).
+
+Dataset contains over 3.8 milion observations of 55 variables of different types. There are several variables describing the birth circumstances, mother's features, as well as origins and ethnicity of both parents.
+
+This dataset gives us a lot of possibilities in terms of choosing the variable of interest – we can investigate many features and the influences of the different measures. We would like to check which features may affect if the baby is born healthy, so we decided to focus on variable *DBWT* that indicates the weight of the newborn baby. We will create a new variable - *HEALTHY* - that will be a categorical variable that classifies if the baby's weight falls into correct interval. 
+
+Detailed dataset and variables description available [here](https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Dataset_Documentation/DVS/natality/UserGuide2018-508.pdf).
+
+# 1. Data Inspection
+
+Dataset is available in CSV file with just one sheet. Variables are of different types, therefore they need to be closely studied before further analysis. In most of the columns missing values are treated as a separate category and have previously assigned value. This may affect the way we qualify some variables as categorical or numeric, e.g. our variable of interest is expressed in grams but missing values are denoted as 9999 which may disturb future modelling.
+
+```{r data import}
+
+setwd("C:\\Users\\tomcz\\Desktop\\UNI\\II SEM\\MACHINE LEARNING\\PROJECT\\CLASSIFICATION")
+data <- read_csv("US_births(2018).csv")
+```
+
+This dataset has nearly 4 million rows, and it proved to be too heavy to handle for our CPUs and GPUs. Therefore, and we hop the logic holds up, we will use data partitioning to create a subset of the data. The goal is to have a subset that will still have a strong representation of our original data.
+
+```{r}
+
+set.seed(1922)
+data_which_rows <- createDataPartition(data$DBWT, p = 0.9, list = FALSE)
+
+data <- data[-data_which_rows,]
+```
+
+After partitioning the dataset has 380 152 observations of 55 variables.
+
+## 1.1. Initial Selection
+
+The table below presents all variables with short description and their type. The last column shows how missing values are represented in a given variable.
+
+| VARIABLE | DESCRIPTION | TYPE | STATUS | MISSING VALUE |
+| :------- | :---------- | :--- | :----- | :-----------: |
+| ATTEND | type of attendant at birth | NOMINAL | TO BE DELETED | 9 |
+| BFACIL | birth place | NOMINAL | TO BE DELETED | 9 |
+| BMI | mother's BMI before pregnancy | CONTINUOUS | TO BE KEPT | 99.9 |
+| CIG_0 | cigarettes before pregnancy | DISCRETE | TO BE KEPT | 99 |
+| DBWT | birth weight in grams | DISCRETE | TO BE KEPT | 9999 |
+| DLMP_MM | last normal period month | NOMINAL | TO BE DELETED | 99 |
+| DLMP_YY | last normal period year | NOMINAL | TO BE DELETED | 9999 |
+| DMAR | marital status | NOMINAL | TO BE KEPT | BLANK |
+| DOB_MM | birth month | NOMINAL | TO BE KEPT | NONE |
+| DOB_TT | birth time | NOMINAL | TO BE DELETED | 9999 |
+| DOB_WK | birth weekday | NOMINAL | TO BE DELETED | NONE |
+| DOB_YY | birth year (2018 for all) | NOMINAL | TO BE DELETED | NONE |
+| DWgt_R | delivery weight recode (weight in pounds) | DISCRETE | TO BE DELETED | 999 |
+| FAGECOMB | father's combined age | DISCRETE | TO BE KEPT | 99 |
+| FEDUC | father's education level | ORDINAL | TO BE KEPT | 9 |
+| FHISPX | father's hispanic origin if present | NOMINAL | TO BE DELETED | 9 |
+| FRACE15 | father's race recode | NOMINAL | TO BE DELETED | 99 |
+| FRACE31 | father's race recode | NOMINAL | TO BE DELETED | 99 |
+| FRACE6 | father's race recode | NOMINAL | TO BE KEPT | 9 |
+| ILLB_R | interval since last birth | NOMINAL? | TO BE DELETED | 888/999 |
+| ILOP_R | interval since last pregnancy | NOMINAL? | TO BE DELETED | 888/999 |
+| ILP_R | interval since last pregnancy | NOMINAL? | TO BE DELETED | 888/999 |
+| IMP_SEX | imputed sex | 1/BLANK | TO BE KEPT | BLANK |
+| IP_GON | gonorrhea presence | Y/N/U | TO BE KEPT | U |
+| LD_INDL | induction of labor | Y/N/U | TO BE KEPT | U |
+| MAGER | mother's age | ORDINAL | TO BE KEPT | NONE |
+| MAGE_IMPFLG | mother's age imputed | 1/BLANK | TO BE KEPT | BLANK |
+| MAR_IMP | mother's imputed marital status | 1/BLANK | TO BE KEPT | BLANK |
+| MBSTATE_REC | mother's nativity (born in/outside of US) | NOMINAL | TO BE KEPT | 3 |
+| MEDUC | mother's edcuation level | ORDINAL | TO BE KEPT | 9 |
+| MHISPX | mother's hispanic origin if present | NOMINAL | TO BE DELETED | 9 |
+| MM_AICU | admit to intensive care | Y/N/U | TO BE KEPT | U |
+| MRACE15 | mother's race recode | NOMINAL | TO BE DELETED | NONE |
+| MRACE31 | mother's race recode | NOMINAL | TO BE DELETED | NONE |
+| MRACEIMP | mother's iputed race | 1/2/BLANK | TO BE KEPT | BLANK |
+| MRAVE6 | mother's race recode (MRACE6) | NOMINAL | TO BE KEPT | NONE |
+| MTRAN | mother transferred | Y/N/U | TO BE KEPT | U |
+| M_Ht_In | mother's height in inches | CONTINUOUS | TO BE KEPT | 99 |
+| NO_INFEC | no infections reported | 1/0/9 | TO BE KEPT | 9 |
+| NO_MMORB | no maternal morbidity reported | 1/0/9 | TO BE KEPT | 9 |
+| NO_RISKS | no risk factors reported | 1/0/9 | TO BE KEPT | 9 |
+| PAY | payment source for delivery | NOMINAL | TO BE DELETED | 9 |
+| PAY_REC | payment recode | NOMINAL | TO BE KEPT | 9 |
+| PRECARE | month prenatal care began | NOMINAL | TO BE KEPT | 99 |
+| PREVIS | number of prenatal visits | DISCRETE | TO BE KEPT | 99 |
+| PRIORDEAD | prior births now dead | DISCRETE | TO BE KEPT | 99 |
+| PRIORLIVE | prior births now living | DISCRETE | TO BE KEPT | 99 |
+| PRIORTERM | prior other terminations | DISCRETE | TO BE KEPT | 99 |
+| PWgt_R | pre-pregnancy weight recode | DISCRETE | TO BE KEPT | 999 |
+| RDMETH_REC | delivery method recode | NOMINAL | TO BE DELETED | 9 |
+| RESTATUS | residence status | NOMINAL | TO BE KEPT | NONE |
+| RF_CESAR | previous cesarean | Y/N/U | TO BE KEPT | U |
+| RF_CESARN | number of previous cesareans | DISCRETE | TO BE KEPT | 99 |
+| SEX | sex of infant | M/F | TO BE KEPT | NONE |
+| WTGAIN | weight gain in pounds | DISCRETE | TO BE KEPT | 99 |
+
+After the inspection of every variable, we qualified several of them for instant deletion. Variables *ATTEND* and *BFACIL* apply to the attendance and facility during birth which does not influence the weight of the baby. *DOB_TT* and *DOB_WK* describe the time and weekday of the birth which also does not affect the dependent variable. The year of birth in variable *DOB_YY* is the same for all observations therefore will be deleted as well. *DWgt_R* is just a convertion from weight in grams to weight in pounds. From 4 variables describing fathers origins or race (*FHISPX*, *FRACE15*, *FRACE31*, *FRACE6*) we decided to keep just one - *FRACE6*. Variables *ILLB_R*, and  *ILOP_R* containing the information about the interval since last birth/pregnancy are of a mixed type - they take values 000-003 if the delivery was plural, and if it was not, they imply the months passed since the last birth/pregnancy. This kind of variable is difficult to transform, so we decided to drop all of them. Same as in the father's case, we decided to keep just one variable describing mother's race/origin - *MRAVE6* - we deleted *MRACE15*, *MRACE31* and *MHISPX*. Variables *PAY* and *PAY_REC* describe the type of payment so there is no need to keep both of them. Finally, *RDMETH_REC* shows the delivery method, which does not affect the dependent variable.
+
+```{r drop qualified}
+
+columns_to_drop <- c("ATTEND", "BFACIL", "DOB_TT", "DOB_WK", "DOB_YY", "DWgt_R", "FHISPX", "FRACE15", "FRACE31", "ILLB_R", "ILOP_R", "ILP_R", "MHISPX", "MRACE15", "MRACE31", "PAY", "RDMETH_REC", "DLMP_MM", "DLMP_YY")
+```
+
+```{r qualified deletion}
+
+for (name in columns_to_drop){
+  data[name] <- NULL
+}
+```
+
+## 1.2. Missing Values
+
+Even though in most of the columns missing values had an assigned value, we have to check if none of them contain some blank cells.
+
+```{r missing values}
+
+sapply(data, function(x) sum(is.na(x)))
+```
+
+We can see that 5 columns contain some missing values. Let's take a closer look at them.
+
+```{r empty columns}
+
+empty_columns <- names(which(colSums(is.na(data)) > 0))
+empty_columns
+```
+
+```{r percentage missing}
+
+for (name in empty_columns){
+  missing_cells <- sum(is.na(data[name]))
+  percentage <- round((missing_cells * 100)/(nrow(data)), 3)
+  print(paste("Missing values in", name, ":", percentage, "%"))
+}
+```
+
+As we can see 4 of them have more than 90% missing values which qualifies them for the deletion.
+
+```{r deleting columns}
+
+columns_to_drop <- c("IMP_SEX", "MAGE_IMPFLG", "MAR_IMP", "MRACEIMP")
+
+for (name in columns_to_drop){
+  data[name] <- NULL
+}
+```
+
+Let's take a closer look at variable *DMAR* where the missing values make almost 12% of the total observations. We will keep this variable for now since around 450k observations is a lot to drop. We will treat missing values as a third category to keep those rows in a dataset.
+
+```{r dmar table}
+
+table(data$DMAR, useNA = "ifany")
+```
+
+```{r dmar replace}
+
+data$DMAR[is.na(data$DMAR)] <- 3
+table(data$DMAR, useNA = "ifany")
+```
+
+After deleting selected variables we are left with 32 features. Now, we will group continuous, discrete and ordinal variables according to the missing value representation. We deleted or transformed columns with blank cells which leaves us with the following groups:
+
+```{r variables groups}
+
+group_9 <- c("FEDUC", "FRACE6", "MEDUC", "NO_INFEC", "NO_MMORB", "NO_RISKS", "PAY_REC")
+group_99 <- c("CIG_0", "FAGECOMB", "M_Ht_In", "PREVIS", "PRIORDEAD", "PRIORLIVE", "PRIORTERM", "RF_CESARN", "WTGAIN")
+```
+
+Variable *BMI* has missing values represented by 99.9, variable *PWgt_R* by 999 and variable *DBWT* by 9999.
+
+```{r removing missing}
+
+data <- filter(data, BMI != 99.9)
+data <- filter(data, PWgt_R != 999)
+data <- filter(data, DBWT != 9999)
+
+for (name in group_9){
+  data <- data[data[[name]] != 9, ]
+}
+
+for (name in group_99){
+  data <- data[data[[name]] != 99, ]
+}
+```
+
+After cleaning the data we are left with 289 721 observations of 32 variables.
+
+## 1.3. Creating HEALTHY
+
+Now is the time to create our binary dependent variable - *HEALTHY*. The average birth weight for babies is around 7.5 lb (3.5 kg), although between 5.5 lb (2.5 kg) and 8.5 lb (4 kg) is considered normal. Therefore we set the healthy interval between 2500 and 4000 grams. We decided also to create a separate dataset where variable *HEALTHY* will not be binary but nominal with classes "underweight" for babies under 2500 grams, "healthy" for babies that weigh between 2500 and 4000 grams and "overweight" for those weighing more than 4000 grams.
+
+Creating copy of the data:
+
+```{r data copying}
+
+data_b <- data
+```
+
+```{r healthy creation}
+
+data_b$HEALTHY <- ifelse((data$DBWT >= 2500 & data$DBWT <= 4000), 1, 0) #binary
+data$HEALTHY <- ifelse((data$DBWT <= 2500), 0, ifelse((data$DBWT <= 4000), 1, 2)) #nominal
+```
+
+```{r healthy table}
+
+table(data$HEALTHY)
+```
+
+```{r healthy table2}
+
+table(data_b$HEALTHY)
+```
+
+In our dataset we have around 244k healthy babies and around 45k babies that fall out of our healthy interval (underweight and overweight together). This means that our variable is unbalanced and will need some resampling on train data.
+
+## 1.4. Data Converting
+
+Before further inspection of the variables, we need to convert the data to appropriate types. There are 12 numeric variables and 21 categorical variables. Some of the categorical variables have already assigned numbers as levels, however by default R will treat them as quantitative variables, so we have to transform them as factors as well. 
+
+```{r categorical numeric}
+
+data_categorical_vars <- c("DMAR", "DOB_MM", "FRACE6", "MBSTATE_REC", "MRAVE6", "PAY_REC", "PRECARE", "RESTATUS", "IP_GON", "LD_INDL", "MM_AICU", "MTRAN", "NO_INFEC", "NO_MMORB", "NO_RISKS", "RF_CESAR", "SEX", "MEDUC", "FEDUC", "MAGER", "HEALTHY")
+
+data_numeric_vars <- c("BMI", "CIG_0", "DBWT", "FAGECOMB", "M_Ht_In", "PREVIS", "PRIORDEAD", "PRIORLIVE", "PRIORTERM", "PWgt_R", "RF_CESARN", "WTGAIN")
+```
+
+```{r converting data}
+
+for (variable in data_categorical_vars) {
+  data[[variable]] <- as.factor(data[[variable]])
+}
+
+for (variable in data_categorical_vars) {
+  data_b[[variable]] <- as.factor(data_b[[variable]])
+}
+```
+
+Among the categorical variables there are 4 that take values 0 or 1, let's add labels to them in both datasets.
+
+```{r labels}
+
+data$NO_INFEC <- factor(data$NO_INFEC,
+                        levels = c(0, 1),
+                        labels = c("No", "Yes"))
+
+data$NO_MMORB <- factor(data$NO_MMORB,
+                        levels = c(0, 1),
+                        labels = c("No", "Yes"))
+
+data$NO_RISKS <- factor(data$NO_RISKS,
+                        levels = c(0, 1),
+                        labels = c("No", "Yes"))
+
+data$HEALTHY <- factor(data$HEALTHY,
+                       levels = c(0, 1, 2),
+                       labels = c("underweight", "healthy", "overweight"))
+
+data_b$NO_INFEC <- factor(data_b$NO_INFEC,
+                          levels = c(0, 1),
+                          labels = c("No", "Yes"))
+
+data_b$NO_MMORB <- factor(data_b$NO_MMORB,
+                          levels = c(0, 1),
+                          labels = c("No", "Yes"))
+
+data_b$NO_RISKS <- factor(data_b$NO_RISKS,
+                          levels = c(0, 1),
+                          labels = c("No", "Yes"))
+
+data_b$HEALTHY <- factor(data_b$HEALTHY,
+                         levels = c(0, 1),
+                         labels = c("No", "Yes"))
+```
+
+Moreover, 3 of those 21 categorical variables are ordinal. The levels are expressed as numbers so by default R should order them in an increasing way but let's check the levels.
+
+```{r levels}
+
+levels(data$MEDUC)
+levels(data$FEDUC)
+levels(data$MAGER)
+```
+
+As we can see all of the levels are ordered properly so we do not need to change that. The next step is to check our numeric variables and transform them if necessary.
+
+```{r numeric check}
+
+for (variable in data_numeric_vars) {
+  if (is.numeric(data[[variable]]) == FALSE) print(variable)
+}
+```
+
+The variable *RF_CESARN* needs to be transformed into numeric in both sets.
+
+```{r cesarn numeric}
+
+data$RF_CESARN <- as.numeric(data$RF_CESARN)
+data_b$RF_CESARN <- as.numeric(data_b$RF_CESARN)
+```
+
+Prior to applying transformations to our data, we first must split the data into training and testing set. Transformations on data should be applied to the training set only. 
+
+Before we move on, let's save our data.
+
+```{r data save}
+
+save(list = c("data", "data_b"),
+     file = "data_prepped.RData")
+```
+
+# 2. Splitting the data
+
+Before applying transformations to chosen variables we divide the observations into train and test sets. Using the createDataPartition method, we receive a vector of indices. With this vector, we can conveniently split the data into training and testing sample.
+
+```{r train/test split}
+
+set.seed(1922)
+data_which_train <- createDataPartition(data$DBWT, p = 0.7, list = FALSE) 
+
+data_train <- data[data_which_train,]
+data_test <- data[-data_which_train,]
+
+data_train_b <- data_b[data_which_train,]
+data_test_b <- data_b[-data_which_train,]
+```
+
+We splitted both data sets into training and testing sets.
+
+```{r summary train}
+
+summary(data_train$DBWT)
+```
+
+```{r summary test}
+
+summary(data_test$DBWT)
+```
+
+```{r summary b train}
+
+summary(data_train_b$DBWT)
+```
+
+```{r summary b test}
+
+summary(data_test_b$DBWT)
+```
+
+Symmetry measures are very similar between train and test sets. Even though the maximum values differ, we will keep this partition. Now that we have our data split, we can begin to perform transformations on the training sample.
+
+Before proceeding we have to delete variable *DBWT* from all datasets and from the list of numeric variables.
+
+```{r dbwt deletion}
+
+data_train$DBWT <- NULL
+data_test$DBWT <- NULL
+
+data_train_b$DBWT <- NULL
+data_test_b$DBWT <- NULL
+
+data_numeric_vars <- data_numeric_vars[data_numeric_vars != "DBWT"]
+```
+
+# 3. Up-sampling
+
+Up-sampling the data means that we create new observations for the minority class in an unbalanced dataset. It is accomplished by making copies of observations and adding them to the dataset, so we can increase the size of the smaller classes.
+
+```{r upsampling}
+
+set.seed(1922)
+up_train <- upSample(x = data_train,
+                     y = data_train$HEALTHY)                         
+table(up_train$HEALTHY)
+```
+
+```{r upsampling2}
+
+set.seed(1922)
+up_train_b <- upSample(x = data_train_b,
+                     y = data_train_b$HEALTHY)                         
+table(up_train_b$HEALTHY)
+```
+
+For the modeling phase we decided to keep all 4 datasets - unbalanced with binary variable (data_train_b), balanced with binary variable (up_train_b), unbalanced with nominal variable (data_train) and balanced with nominal variable (up_train). We will compare the results between all of them.
+
+# 4. Data Transformation
+
+## 4.1. Variables Distribution
+
+To decide how to treat particular variables we generated plots for their distributions and distributions of their transormed forms. The graphs for all of the variables are accessible within the attached R code. Below we presented graphs of the variables chosen to be transformed.
+
+```{r all variables distributions, message = FALSE, warning = FALSE, cache = TRUE, include = FALSE}
+
+for (name in data_numeric_vars){
+  mean_of_variable <- sapply(data_train[name], mean)
+  minimum <- min(data_train[name])
+  maximum <- max(data_train[name])
+  standard_deviation <- sapply(data_train[name], sd)
+  
+  plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                   geom_histogram(aes(y = ..density..), fill = "brown1", bins = 100, alpha = 0.7) +
+                   theme_bw() + 
+                   labs(x = paste(name, 'regular')) +
+                   stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+  plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+            geom_histogram(aes(y = ..density..), fill = "brown1", bins = 100, alpha = 0.7) +
+            theme_bw() + 
+            labs(x = paste(name, 'log transform')) + 
+            scale_x_log10() 
+  
+  plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+            geom_histogram(aes(y = ..density..), fill = "brown1", bins = 100, alpha = 0.7) +
+            theme_bw() +
+            labs(x = paste(name, 'square root')) + 
+            scale_x_sqrt() 
+  
+  cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+  print(cumulative_plot)
+}
+```
+
+#### Selected for Transformation {.tabset .tabset-pills}
+
+These variables show enough normality to be worth keeping after necessery transformations.
+
+##### BMI
+
+```{r bmi hist, echo = FALSE}
+
+name = "BMI"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "brown1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "brown1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "brown1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### PWgt_R
+
+```{r pwgt_r hist, echo = FALSE}
+
+name = "PWgt_R"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "brown1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "brown1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "brown1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+#### {-}
+
+## 4.2. Transformation
+
+Let's apply the transformations to some of our variables that we selected earlier.
+
+```{r data transformation}
+
+data_train[c("BMI", "PWgt_R")] <- log(data_train[c("BMI", "PWgt_R")])
+data_test[c("BMI", "PWgt_R")] <- log(data_test[c("BMI", "PWgt_R")])
+
+data_train_b[c("BMI", "PWgt_R")] <- log(data_train_b[c("BMI", "PWgt_R")])
+data_test_b[c("BMI", "PWgt_R")] <- log(data_test_b[c("BMI", "PWgt_R")])
+```
+
+# 5. Feature Selection
+
+The next step in development of our predictive model will be reducing the number of input variables by checking which of them influence the dependent variable the most.
+
+## 5.1. Numeric
+
+### 5.1.1. Colinearity
+
+First, the correlation of the numeric variables will be explored. Let's perform a check for multicolinearity - if any of our variables are correlated with each other and due to that can be dropped.
+
+```{r linear combos}
+
+data_linear_combinations <- findLinearCombos(data_train[, data_numeric_vars])
+data_linear_combinations
+```
+
+Turns out no sets of variables are correlated significantly enough.
+
+### 5.1.2. Correalations
+
+Correlation explains how one or more variables are related to each other. It determines how attributes change in relation with each other which is extremely helpful in further feature selection. We will check if the numeric variables impact our dependent variable. Due to the fact that our variable is categorical, we will use ANOVA to check that. If we use just one continuous predictor in the test we can just "flip" the model around so that outcome variable and predictor variable switch places.
+
+```{r anova}
+
+for (variable in data_numeric_vars) {
+  anova1 <- aov(data_train[[variable]] ~ data_train$HEALTHY)
+  print(summary(anova1))
+}
+
+for (variable in data_numeric_vars) {
+  anova1 <- aov(data_train_b[[variable]] ~ data_train_b$HEALTHY)
+  print(summary(anova1))
+}
+```
+
+All of the numeric variables returned very low p-value, which means that in all cases we can reject the null hypothesis. However, we cannot 100% trust the p-value, because when it comes to the big datasets even the small fluctuations may have a significant influence on the p-value. We decided to keep all the numeric variables.
+
+## 5.2. Categorical
+
+The Cramer's V coefficient is used to test the strength of relationship between two categorical variables. It takes values from 0 to 1 unless both variables have only two levels - then it takes values from -1 to 1. Let's test how all of our categorical variables are related to *HEALTHY*.
+
+```{r cramerv}
+for (variable in data_categorical_vars) {
+  a <- CramerV(data_train[["HEALTHY"]], data_train[[variable]])
+  print(paste(variable, ":", a))
+}
+
+for (variable in data_categorical_vars) {
+  a <- CramerV(data_train_b[["HEALTHY"]], data_train_b[[variable]])
+  print(paste(variable, ":", a))
+}
+```
+
+As we can see the relations are not strong - the highest score is equal to 0.1126 for the variable *MTRAN*. We decided to keep 5 categorical variables with the highest score and later check if they will be jointly significant for the model.
+
+## 5.3. Final Selection
+
+We will keep all 12 numeric variables and 5 categorical ones.
+
+```{r selected variables}
+
+selected_variables <- c("HEALTHY","BMI", "CIG_0", "FAGECOMB", "M_Ht_In", "PREVIS", "PRIORDEAD", "PRIORLIVE", "PRIORTERM", "PWgt_R", "RF_CESARN", "WTGAIN", "MTRAN", "NO_RISKS", "MRAVE6", "FRACE6", "PRECARE")
+```
+
+# 6. Basic Models
+
+The glm() function automatically recodes categorical variables into dummies, assuming by default the first level of the variable as the reference. The next step is to perfom likelihood ratio test in which we check the hypothesis that says that model with selected variables is equally good as a model with just a constant. Low p-value means that our explanatory variables are jointly significant.
+
+For binary dependent variable we tested models:
+
+* Logit
+* Probit
+
+For nominal dependent variables we tested models:
+
+* Ordered Logit
+* Multinomial Logit
+* Naive Bayes Classifier
+* Regression Tree
+
+## 6.1. Logit
+
+Logit model is used to model two level outcome variables. In this model the log odds of the outcome are modeled as a linear combination of the predictor variables.
+
+#### {.tabset .tabset-pills}
+
+##### Logit 1
+
+```{r logit1 model}
+
+logit1 <- glm(HEALTHY ~ MTRAN + WTGAIN + M_Ht_In + PWgt_R,
+                     family =  binomial(link = "logit"),
+                     data = data_train_b)
+
+summary(logit1)
+lrtest(logit1)
+```
+
+##### Logit 1 (upsampling)
+
+```{r logit1 up model}
+
+logit1_up <- glm(HEALTHY ~ MTRAN + WTGAIN + M_Ht_In + PWgt_R,
+                     family =  binomial(link = "logit"),
+                     data = up_train_b)
+
+summary(logit1_up)
+lrtest(logit1_up)
+```
+
+##### Logit 2
+
+```{r logit2 model}
+
+logit2 <- glm(HEALTHY ~ .,
+                     family =  binomial(link = "logit"),
+                     data = data_train_b %>%
+                       dplyr::select(all_of(selected_variables)))
+
+summary(logit2)
+lrtest(logit2)
+```
+
+##### Logit 2 (upsampling)
+
+```{r logit2 model up}
+
+logit2_up <- glm(HEALTHY ~ .,
+                     family =  binomial(link = "logit"),
+                     data = up_train_b %>%
+                       dplyr::select(all_of(selected_variables)))
+
+summary(logit2_up)
+lrtest(logit2_up)
+```
+
+#### {-}
+
+## 6.2. Probit
+
+Probit model is used to model binary outcome variables. In this model, the inverse standard normal distribution of the probability is modeled as a linear combination of the predictors.
+
+#### {.tabset .tabset-pills}
+
+##### Probit 1
+
+```{r probit 1 model}
+
+probit1 <- glm(HEALTHY ~ MTRAN + WTGAIN + M_Ht_In + PWgt_R,
+                     family =  binomial(link = "probit"),
+                     data = data_train_b)
+
+summary(probit1)
+lrtest(probit1)
+```
+
+##### Probit 1 (upsampling)
+
+```{r probit1 model up}
+
+probit1_up <- glm(HEALTHY ~ MTRAN + WTGAIN + M_Ht_In + PWgt_R,
+                     family =  binomial(link = "probit"),
+                     data = up_train_b)
+
+summary(probit1_up)
+lrtest(probit1_up)
+```
+
+##### Probit 2
+
+```{r probit2 model}
+
+probit2 <- glm(HEALTHY ~ .,
+                     family =  binomial(link = "probit"),
+                     data = data_train_b %>%
+                       dplyr::select(all_of(selected_variables)))
+
+summary(probit2)
+lrtest(probit2)
+```
+
+##### Probit 2 (upsampling)
+
+```{r probit2 model up}
+
+probit2_up <- glm(HEALTHY ~ .,
+                     family =  binomial(link = "probit"),
+                     data = up_train_b %>%
+                       dplyr::select(all_of(selected_variables)))
+
+summary(probit2_up)
+lrtest(probit2_up)
+```
+
+#### {-}
+
+## 6.3. Ordered Logit
+
+The ordered logit model is a regression model for an ordinal outcome variable. The model is based on the cumulative probabilities of the response variable. Our variable is nominal (we can say that being "healthy" is the best but we cannot order if "underweight" or "overweight" is worse) but we decided to test the performance of this model as well and compare with others.
+
+#### {.tabset .tabset-pills}
+
+##### Ordered Logit 1
+
+```{r ordered logit model}
+
+ordered_logit1 <- polr(HEALTHY ~ MTRAN + WTGAIN + M_Ht_In + PWgt_R, data = data_train, Hess=TRUE)
+summary(ordered_logit1)
+
+table <- coef(summary(ordered_logit1))
+pvalue <- pnorm(abs(table[, "t value"]), lower.tail = FALSE) * 2
+table <- cbind(table, "p value" = pvalue)
+table
+```
+
+##### Ordered Logit 1 (upsampling)
+
+```{r ordered logit model up}
+
+ordered_logit1_up <- polr(HEALTHY ~ MTRAN + WTGAIN + M_Ht_In + PWgt_R, data = up_train, Hess=TRUE)
+summary(ordered_logit1_up)
+
+table <- coef(summary(ordered_logit1_up))
+pvalue <- pnorm(abs(table[, "t value"]), lower.tail = FALSE) * 2
+table <- cbind(table, "p value" = pvalue)
+table
+```
+
+##### Ordered Logit 2
+
+```{r ordered logit2 model}
+
+ordered_logit2 <- polr(HEALTHY ~ ., data = data_train %>%
+                       dplyr::select(all_of(selected_variables)), Hess=TRUE)
+summary(ordered_logit2)
+
+table <- coef(summary(ordered_logit2))
+pvalue <- pnorm(abs(table[, "t value"]), lower.tail = FALSE) * 2
+table <- cbind(table, "p value" = pvalue)
+table
+```
+
+##### Ordered Logit 2 (upsampling)
+
+```{r ordered logit2 model up}
+
+ordered_logit2_up <- polr(HEALTHY ~ ., data = up_train %>%
+                       dplyr::select(all_of(selected_variables)), Hess=TRUE)
+summary(ordered_logit2_up)
+
+table <- coef(summary(ordered_logit2_up))
+pvalue <- pnorm(abs(table[, "t value"]), lower.tail = FALSE) * 2
+table <- cbind(table, "p value" = pvalue)
+table
+```
+
+#### {-}
+
+## 6.4. Multinomial Logit
+
+Multinomial logistic regression is used to model nominal outcome variables, in which the log odds of the outcomes are modeled as a linear combination of the predictor variables.
+
+#### {.tabset .tabset-pills}
+
+##### Multinomial Logit 1
+
+```{r mlogit1 model}
+
+mlogit1 <- multinom(HEALTHY ~ MTRAN + WTGAIN + M_Ht_In + PWgt_R, data = data_train)
+
+summary(mlogit1)
+```
+
+##### Multinomial Logit 1 (upsampling)
+
+```{r mlogit1 model up}
+
+mlogit1_up <- multinom(HEALTHY ~ MTRAN + WTGAIN + M_Ht_In + PWgt_R, data = up_train)
+
+summary(mlogit1_up)
+```
+
+##### Multinomial Logit 2
+
+```{r mlogit2 model}
+
+mlogit2 <- multinom(HEALTHY ~ ., data = data_train %>%
+                       dplyr::select(all_of(selected_variables)))
+
+summary(mlogit2)
+```
+
+##### Multinomial Logit 2 (upsampling)
+
+```{r mlogit2 model up}
+
+mlogit2_up <- multinom(HEALTHY ~ ., data = up_train %>%
+                       dplyr::select(all_of(selected_variables)))
+
+summary(mlogit2_up)                            
+```
+
+#### {-}
+
+## 6.5. Naive Bayes
+
+Naive Bayes algorithm is based on Bayes' Theorem and assumes an independence among predictors. More precisely, it assumes that the presence of a particular feature in a class is unrelated to the presence of any other feature.
+
+#### {.tabset .tabset-pills}
+
+##### Bayes 1
+
+```{r bayes1 model}
+
+bayes1 <- naive_bayes(HEALTHY ~ MTRAN + WTGAIN + M_Ht_In + PWgt_R, data = data_train, usekernel = T)
+summary(bayes1)
+```
+
+##### Naive Bayes 1 (upsampling)
+
+```{r bayes1 model up}
+
+bayes1_up <- naive_bayes(HEALTHY ~ MTRAN + WTGAIN + M_Ht_In + PWgt_R, data = up_train, usekernel = T)
+summary(bayes1_up)
+```
+
+##### Naive Bayes 2
+
+```{r bayes2 model}
+
+bayes2 <- naive_bayes(HEALTHY ~ ., data = data_train, usekernel = T)
+summary(bayes2)
+```
+
+##### Naive Bayes 2 (upsampling)
+
+```{r bayes2 model up}
+
+bayes2_up <- naive_bayes(HEALTHY ~ ., data = up_train, usekernel = T)
+summary(bayes2_up)
+```
+
+#### {-}
+
+## 6.6. Regression Tree
+
+```{r regression tree}
+
+tree <- rpart(HEALTHY~ MTRAN + WTGAIN + PWgt_R + PREVIS +
+                PRIORDEAD + M_Ht_In + CIG_0 + BMI + FAGECOMB  +
+                PRIORLIVE + PRIORTERM + NO_INFEC, data = up_train, method = 'class')
+rpart.plot(tree) 
+```
+
+From the variables chosen, we can see that the tree model saw PREVIS variable as the bigget factor in categorizing the data. Next was the WTGAIN variable, PWGT_R and M_HT_IN. The decisions upon the the weight variables make sense, but it's peculiar why the PREVIS variable was chosen as the most important one. A soon as a woman had less than 9 prenatal visits, the model automatically classifies the baby as underweight.
+
+# 7. Predictions
+
+We created two functions that will allow us to display the accuracy of the predicitions of the model compared with the real data in the training sets.
+
+```{r summary binary}
+
+summary_ordinal <- function(predictions, real_data){
+  
+  accurate <- c(predictions == real_data)
+  accurate <- sum(accurate)
+  accurate <- accurate / length(real_data)
+  print(paste('Total percentage accuracy --- ', accurate))
+  
+  ### underweight
+  under_indices <- real_data == "underweight"
+  under_results <- results[under_indices]
+  under_real_data <- real_data[under_indices]
+  
+  under_accuracy <- sum(c(under_results == under_real_data))
+  under_accuracy <- under_accuracy / length(under_real_data)
+  print(paste('Total underweight percentage accuracy --- ', under_accuracy))
+  
+  ### healthy
+  healthy_indices <- real_data == "healthy"
+  healthy_results <- results[healthy_indices]
+  healthy_real_data <- real_data[healthy_indices]
+  
+  healthy_accuracy <- sum(c(healthy_results == healthy_real_data))
+  healthy_accuracy <- healthy_accuracy / length(healthy_real_data)
+  print(paste('Total healthy percentage accuracy --- ', healthy_accuracy))
+  
+  ### overweight
+  over_indices <- real_data == "overweight"
+  over_results <- results[over_indices]
+  over_real_data <- real_data[over_indices]
+  
+  over_accuracy <- sum(c(over_results == over_real_data))
+  over_accuracy <- over_accuracy / length(over_real_data)
+  print(paste('Total overweight percentage accuracy --- ', over_accuracy))
+  
+}
+
+summary_binary <- function(predictions, real_data){
+  accurate <- c(predictions == real_data)
+  accurate <- sum(accurate)
+  accurate <- accurate / length(real_data)
+  print(paste('Total percentage accuracy --- ',accurate))
+  
+  ### only positives
+  positive_indices <- real_data == "Yes"
+  positive_results <- results[positive_indices]
+  positive_real_data <- real_data[positive_indices]
+  
+  positive_accuracy <- sum(c(positive_results == positive_real_data))
+  positive_accuracy <- positive_accuracy / length(positive_real_data)
+  print(paste('Total positive percentage accuracy --- ',positive_accuracy))
+  
+  ### only negatives
+  negative_indices <- real_data == "No"
+  negative_results <- results[negative_indices]
+  negative_real_data <- real_data[negative_indices]
+  
+  negative_accuracy <- sum(c(negative_results == negative_real_data))
+  negative_accuracy <- negative_accuracy / length(negative_real_data)
+  print(paste('Total negative percentage accuracy --- ',negative_accuracy))
+  
+}
+```
+
+## 7.1. Logit
+
+#### {.tabset .tabset-pills}
+
+##### Logit 1
+
+```{r logit1 predictions}
+
+results <- predict(logit1, newdata = data_test_b)
+results <- factor(ifelse(results > 0.5,'Yes','No'),
+                     levels = c('Yes', 'No'))
+
+
+confusionMatrix(data = results, reference = data_test_b$HEALTHY)
+
+summary_binary(results, data_test_b$HEALTHY)
+```
+
+##### Logit 1 (upsampling)
+
+```{r logit1 predictions up}
+
+results <- predict(logit1_up, newdata = data_test_b)
+results <- factor(ifelse(results > 0.5,'Yes','No'),
+                     levels = c('Yes', 'No'))
+
+
+confusionMatrix(data = results, reference = data_test_b$HEALTHY)
+
+summary_binary(results, data_test_b$HEALTHY)
+```
+
+##### Logit 2
+
+```{r logit2 predictions}
+
+results <- predict(logit2, newdata = data_test_b)
+results <- factor(ifelse(results > 0.5,'Yes','No'),
+                     levels = c('Yes', 'No'))
+
+
+confusionMatrix(data = results, reference = data_test_b$HEALTHY)
+
+summary_binary(results, data_test_b$HEALTHY)
+```
+
+##### Logit 2 (upsampling)
+
+```{r logit2 predictions up}
+
+results <- predict(logit2_up, newdata = data_test_b)
+results <- factor(ifelse(results > 0.5,'Yes','No'),
+                     levels = c('Yes', 'No'))
+
+
+confusionMatrix(data = results, reference = data_test_b$HEALTHY)
+
+summary_binary(results, data_test_b$HEALTHY)
+```
+
+#### {-}
+
+## 7.2. Probit
+
+#### {.tabset .tabset-pills}
+
+##### Probit 1
+
+```{r probit1 predictions}
+
+results <- predict(probit1, newdata = data_test_b)
+results <- factor(ifelse(results > 0.5,'Yes','No'),
+                     levels = c('Yes', 'No'))
+
+
+confusionMatrix(data = results, reference = data_test_b$HEALTHY)
+
+summary_binary(results, data_test_b$HEALTHY)
+```
+
+##### Probit 1 (upsampling)
+
+```{r probit1 predicitons up}
+
+results <- predict(probit1_up, newdata = data_test_b)
+results <- factor(ifelse(results > 0.5,'Yes','No'),
+                     levels = c('Yes', 'No'))
+
+
+confusionMatrix(data = results, reference = data_test_b$HEALTHY)
+
+summary_binary(results, data_test_b$HEALTHY)
+```
+
+##### Probit 2
+
+```{r probit2 predictions}
+
+results <- predict(probit2, newdata = data_test_b)
+results <- factor(ifelse(results > 0.5,'Yes','No'),
+                     levels = c('Yes', 'No'))
+
+
+confusionMatrix(data = results, reference = data_test_b$HEALTHY)
+
+summary_binary(results, data_test_b$HEALTHY)
+```
+
+##### Probit 2 (upsampling)
+
+```{r probot2 predicitions up}
+
+results <- predict(probit2_up, newdata = data_test_b)
+results <- factor(ifelse(results > 0.5,'Yes','No'),
+                     levels = c('Yes', 'No'))
+
+
+confusionMatrix(data = results, reference = data_test_b$HEALTHY)
+
+summary_binary(results, data_test_b$HEALTHY)
+```
+
+#### {-}
+
+## 7.3. Ordered Logit
+
+#### {.tabset .tabset-pills}
+
+##### Ordered Logit 1
+
+```{r ordered logit1 p}
+
+results <- predict(ordered_logit1, newdata = data_test)
+
+confusionMatrix(data = results, reference = data_test$HEALTHY)
+
+summary_ordinal(results, data_test$HEALTHY)
+```
+
+##### Ordered Logit 1 (upsampling)
+
+```{r ordered logit1 p up}
+
+results <- predict(ordered_logit1_up, newdata = data_test)
+
+confusionMatrix(data = results, reference = data_test$HEALTHY)
+
+summary_ordinal(results, data_test$HEALTHY)
+```
+
+##### Ordered Logit 2
+
+```{r ordered logit2 p}
+
+results <- predict(ordered_logit2, newdata = data_test)
+
+confusionMatrix(data = results, reference = data_test$HEALTHY)
+
+summary_ordinal(results, data_test$HEALTHY)
+```
+
+##### Ordered Logit 2 (upsampling)
+
+```{r ordered logit2 p up}
+
+results <- predict(ordered_logit2_up, newdata = data_test)
+
+confusionMatrix(data = results, reference = data_test$HEALTHY)
+
+summary_ordinal(results, data_test$HEALTHY)
+```
+
+#### {-}
+
+## 7.4. Multinomial Logit
+
+#### {.tabset .tabset-pills}
+
+##### Multinomial Logit 1
+
+```{r mlogit1 p}
+
+results <- predict(mlogit1, newdata = data_test)
+
+summary_ordinal(results, data_test$HEALTHY)
+```
+
+##### Multinomial Logit 1 (upsampling)
+
+```{r mlogit1 p up}
+
+results <- predict(mlogit1_up, newdata = data_test)
+
+summary_ordinal(results, data_test$HEALTHY)
+```
+
+##### Multinomial Logit 2
+
+```{r mlogit2 p}
+
+results <- predict(mlogit2, newdata = data_test)
+
+summary_ordinal(results, data_test$HEALTHY)
+```
+
+##### Multinomial Logit 2 (upsampling)
+
+```{r mlogit2 p up}
+
+results <- predict(mlogit2_up, newdata = data_test)
+
+summary_ordinal(results, data_test$HEALTHY)
+```
+
+## 7.5. Naive Bayes
+
+#### {.tabset .tabset-pills}
+
+##### Naive Bayes 1
+
+```{r bayes1 p}
+
+predictions <- predict(bayes1, data_test)
+summary_ordinal(predictions, data_test$HEALTHY)
+```
+
+##### Naive Bayes 1 (upsampling)
+
+```{r bayes1 p up}
+
+predictions <- predict(bayes1_up, data_test)
+summary_ordinal(predictions, data_test$HEALTHY)
+```
+
+##### Naive Bayes 2
+
+```{r bayes2 p}
+
+predictions <- predict(bayes2, data_test)
+summary_ordinal(predictions, data_test$HEALTHY)
+```
+
+##### Naive Bayes 2 (upsampling)
+
+```{r bayes2 p up}
+
+predictions <- predict(bayes2_up, data_test)
+summary_ordinal(predictions, data_test$HEALTHY)
+```
+
+#### {-}
+
+# 8. Results
+
+Results of accuracy of predictions from models on binary outcome variable:
+
+| MODEL | DATA | TOTAL ACCURACY | HEALTHY | UNHEALTHY |
+| :---- | :--- | :------------: | :-----: | :-------: |
+| logit 1 | unbalanced | 0.844 | 0.997 | 0.015 |
+| logit 1 | balanced | 0.837 | 0.986 | 0.037 |
+| logit 2 | unbalanced | 0.843 | 0.997 | 0.016 |
+| logit 2 | balanced | 0.778 | 0.886 | 0.198 |
+| probit 1 | unbalanced | 0.843 | 0.998 | 0.016 |
+| probit 1 | balanced | 0.531 | 0.531 | 0.525 |
+| probit 2 | unbalanced | 0.842 | 0.994 | 0.024 |
+| probit 2 | balanced | 0.532 | 0.520 | 0.594 |
+
+Results of accuracy of predictions from models on nominal/ordinal outcome variable:
+
+| MODEL | DATA | TOTAL ACCURACY | UNDERWEIGHT | HEALTHY | OVERWEIGHT |
+| :---- | :--- | :------------: | :---------: | :-----: | :--------: |
+| ordered logit 1 | unbalanced | 0.842 | 0.020 | 0.999 | 0.000 |
+| ordered logit 1 | balanced | 0.097 | 0. 967 | 0.026 | 0.028 |
+| ordered logit 2 | unbalanced | 0.843 | 0.022 | 0.998 | 0.002 |
+| ordered logit 2 | balanced | 0.156 | 0.945 | 0.096 | 0.052 |
+| mlogit 1 | unbalanced | 0.843 | 0.026 | 0.998 | 0.001 |
+| mlogit 1 | balanced | 0.427 | 0.676 | 0.446 | 0.006 |
+| mlogit 2 | unbalanced | 0.843 | 0.027 | 0.998 | 0.002 |
+| mlogit 2 | balanced | 0.490 | 0.749 | 0.512 | 0.032 |
+| bayes 1 | unbalanced | 0.842 | 0.749 | 0.512 | 0.032 |
+| bayes 1 | balanced | 0.075 | 0.749 | 0.512 | 0.032 |
+| bayes 2 | unbalanced | 0.842 | 0.749 | 0.512 | 0.032 |
+| bayes 2 | balanced | 0.100 | 0.749 | 0.512 | 0.032 |
+
+# 9. Conclusions
+
+None of the models yielded satisfying results. We can see a huge differece in predictions between balanced and unbalanced samples. Even though the scores for total accuracy are quite good, a lot of them over 80%, when we take a closer look at the accuracy for predicting particular classes we see significant differences between them. For some models predicting binary outcome variable the accuracy is around 50% which is equal to the probability of randomly assigning two classes to the observations. In the models predicting nominal variables the accuracy is very uneven between classes, some models achieved less than 10% total accuracy which is also less than the probability of randomly assigning classes. Our final conclusion would be that in available dataset the independent variables do not predict the dependent variable and therefore the model cannot be constructed based on them.
+
+# 10. Sources
+
+1. https://www.kaggle.com/des137/us-births-2018
+
+2. https://www.cdc.gov/nchs/data_access/vitalstatsonline.htm#Tools
+
+3. https://ftp.cdc.gov/pub/Health_Statistics/NCHS/Dataset_Documentation/DVS/natality/UserGuide2018-508.pdf
+
+4. https://en.wikipedia.org/wiki/Birth_weight
+
+5. https://stats.idre.ucla.edu/r/dae/ordinal-logistic-regression/

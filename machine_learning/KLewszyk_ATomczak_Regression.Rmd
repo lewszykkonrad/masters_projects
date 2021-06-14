@@ -1,0 +1,1401 @@
+---
+title: "Facial Analysis - Regression"
+author: "Konrad Lewszyk, Aleksandra Tomczak"
+date: "5/12/2021"
+output:
+  html_document:
+    theme: paper
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+---
+![](Facial Recognition.png)
+
+```{r setup, include = FALSE, echo = FALSE}
+
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
+```
+
+```{r package installation, include = FALSE, echo = FALSE}
+
+requiredPackages = c('caret','dplyr','tibble','purrr','corrplot', 'data.table', 'olsrr', 'janitor', 'smbinning', 'Information', 'BAMMtools', 'bestNormalize', 'classInt')
+for(i in requiredPackages){if(!require(i,character.only = TRUE)) install.packages(i)}
+for(i in requiredPackages){if(!require(i,character.only = TRUE)) library(i,character.only = TRUE) }
+```
+
+```{r libraries import, include = FALSE, echo = FALSE}
+
+library(caret)
+library(dplyr)
+library(tibble)
+library(purrr)
+library(corrplot)
+library(data.table)
+library(readxl)
+library(ggplot2)
+library(ggpubr)
+library(olsrr)
+library(janitor)
+library(glmnet)
+library(classInt)
+```
+
+For this project, we have chosen a dataset from [Chicago Face Database](https://chicagofaces.org/default/) containing characteristics of 600 different faces.
+
+The dataset consists of variables of two kinds. There are straight physical appearance objective traits, such as face length, eye height, eye length, etc. Then we have also subjective variables, where the faces were rated from 1 to 7 on the basis of aggression, age appearance, happiness, dominance, etc. by a group of people. Later for every face, an average was calculated for every variable of this type.
+
+This dataset gives us a lot of possibilities in terms of choosing the variable of interest – we can investigate many features and the influences of the different measures. We decided to choose *Attractive* as our dependent variable and to create a model predicting one's attractiveness based on available attributes.
+  
+# 1. Initial Data Inspection
+
+Dataset is available in a xlsx file with several worksheets. The first sheet contains a list of variables, as well as their detailed descriptions. The next sheets contain observations of some of the variables and differ from each other. For further analysis, we chose the second sheet that consists of 597 observations and 118 attributes. The first 7 rows are empty, so after removing them and one extra row, the dataset is loaded and ready for further processing.
+
+```{r data import}
+
+setwd("C:\\Users\\tomcz\\Desktop\\UNI\\II SEM\\MACHINE LEARNING\\PROJECT\\REGRESSION")
+df = read_xlsx("CFD 3.0 Norming Data and Codebook.xlsx", sheet = 2, skip = 7)
+data <- df[-1,]
+head(data)
+```
+
+## 1.1. Handling Empty Values
+
+The next step is to check if some of the columns contain missing values.
+
+```{r empty columns}
+
+sapply(data, function(x) sum(is.na(x)))
+```
+
+Since we have a lot of columns thet are entirely empty, we can't impute them. Let's get rid of them.
+
+```{r removing empty columns}
+
+data <- Filter(function(x)!all(is.na(x)), data)
+print(paste('missings values: ', sapply(data, function(x) sum(is.na(x))) %>% sum()))
+```
+
+The column *Suitability* is mostly composed of dots '.', which serves as an empty value. Let's remove this column. The first column, *Model*, is just a combination of the index, gender and ethnicity, so we don't need it either. We can also notice, that we have two columns describing the same thing - how raters rated the gender of a person. We have the probability of a person being a woman or a man, but we need only one. Let's get rid of *MaleProb*.
+
+```{r removing unnecessary columns}
+
+data$Suitability <- NULL
+data$Model <- NULL
+data$MaleProb <- NULL
+```
+
+## 1.2. Data Converting
+
+Before further inspection of the variables, we need to convert the data to appropriate types. We have two nominal variables - *EthnicitySelf* and *GenderSelf*, and the rest of the variables are numerical.
+
+```{r data converting}
+
+data$EthnicitySelf <- as.factor(data$EthnicitySelf)
+data$GenderSelf <- as.factor(data$GenderSelf)
+data[3:70] <- sapply(data[3:70], as.numeric)
+```
+
+Before we move on, let's save our data.
+
+```{r data prep save}
+
+save(list = "data",
+     file = "data_prepped.RData")
+```
+
+# 2. Splitting the Data
+
+Now we will explore individual variables and inspect their distributions. Since we want to perform all data transformation based on the training sample, we should perform exploratory data analysis on the training sample as well. We will split the data now.
+
+```{r}
+
+set.seed(987654321)
+data_which_train <- createDataPartition(data$Attractive, p = 0.7, list = FALSE) 
+
+data_train <- data[data_which_train,]
+data_test <- data[-data_which_train,]
+```
+
+```{r}
+
+summary(data_train$Attractive) - summary(data_test$Attractive)
+```
+
+Our test and training sets have very similar distribution and key characteristics of the dependent variable. Brilliant. 
+
+# 3. Variables Transformation
+
+Now that we have our training set, let's explore all numeric variables and see their distributions. This investigation will help us decide which predictors should be dropped and which ones transformed.
+
+## 3.1. Variables Distribution
+
+We begin our analysis with Shapiro-Wilk test for normality for all the variables.
+
+```{r shapiro wilk, echo = FALSE}
+
+data_numeric_vars <- sapply(data_train, is.numeric) %>% which() %>% names()
+p_values <- lapply(data_train[3:70], shapiro.test)
+
+pval <-  sapply(p_values, '[[', 'p.value')
+print(pval)
+```
+
+As we can observe, when it comes to larger data sets, normality tests can be unreliable. Slight deviations from a Gaussian distributions can yield very low p-values. To decide how to treat particular variables we generated plots for their distributions and distributions of their transformed forms. The graphs for all of the variables are accessible within the attached R code. Below we presented graphs of the variables chosen to be deleted or transformed.
+
+```{r data distributions, include = FALSE, echo = FALSE, cache = TRUE}
+
+for (name in data_numeric_vars){
+  mean_of_variable <- sapply(data_train[name], mean)
+  minimum <- min(data_train[name])
+  maximum <- max(data_train[name])
+  standard_deviation <- sapply(data_train[name], sd)
+  
+  plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                   geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                   theme_bw() + 
+                   labs(x = paste(name, 'regular')) +
+                   stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+  plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+            geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+            theme_bw() + 
+            labs(x = paste(name, 'log transform')) + 
+            scale_x_log10() 
+  
+  plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+            geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+            theme_bw() +
+            labs(x = paste(name, 'square root')) + 
+            scale_x_sqrt() 
+  
+  cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+  print(cumulative_plot)
+}
+```
+
+#### Selected for Deletion {.tabset .tabset-pills}
+
+The distributions for these are either extremely skewed, with almost all of the data being a value near zero, or have an opposite of a normal distribution, with extremely high frequency of values around zero and one, and nearly none in between. Log transformation does not help to transform the data into a normal distribution. For now we will get rid of this data.
+
+##### Masculine
+
+```{r masculine hist, echo = FALSE}
+
+name = "Masculine"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### LuminanceMedian
+
+```{r luminance hist, echo = FALSE}
+
+name = "LuminanceMedian"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### PupilTopAsymmetry
+
+```{r pupiltopassymetry hist, echo = FALSE}
+
+name = "PupilTopAsymmetry"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### PupilLipAsymmetry
+
+```{r pupillipasymmetry hist, echo = FALSE}
+
+name = "PupilLipAsymmetry"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### CheekboneProminence
+
+```{r cheekboneprominence hist, echo = FALSE}
+
+name = "CheekboneProminence"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### RaterN
+
+```{r ratern hist, echo = FALSE}
+
+name = "RaterN"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### FemaleProb
+
+```{r femaleprob hist, echo = FALSE}
+
+name = "FemaleProb"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### WhiteProb
+
+```{r whiteprob hist, echo = FALSE}
+
+name = "WhiteProb"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### BlackProb
+
+```{r blackprob hist, echo = FALSE}
+
+name = "BlackProb"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### AsianProb
+
+```{r asianprob hist, echo = FALSE}
+
+name = "AsianProb"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### LatinoProb
+
+```{r latinoprob hist, echo = FALSE}
+
+name = "LatinoProb"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### OtherProb
+
+```{r otherprob hist, echo = FALSE}
+
+name = "OtherProb"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### MultiProb
+
+```{r multiprob hist, echo = FALSE}
+
+name = "MultiProb"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+#### {-}
+
+Two of the irregular distributions stand out from the rest - *AsianProb* and *MultiProb*. If we look at the log transfrmations of these variables, we can see a they could work as categorical variables. If we look at the *OtherProb* and *AsianProb* variable, we can observe there are clusters at certain values. This means that they may be used to classify to which cluster, or a group, a certain value belongs. However, after performing these transformations, our models in a later section displayed worse performance, so eventually these variables were dropped as well.
+
+#### Selected for Transformation {.tabset .tabset-pills}
+
+In the distributions of those variables we can observe enough normality to keep them in our model after necessary transformations.
+
+##### Babyfaced
+
+```{r babyfaced hist, echo = FALSE}
+
+name = "Babyfaced"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### Happy
+
+```{r happy hist, echo = FALSE}
+
+name = "Happy"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### Sad
+
+```{r sad hist, echo = FALSE}
+
+name = "Sad"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### Surprised
+
+```{r surprised hist, echo = FALSE}
+
+name = "Surprised"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### Trustworthy
+
+```{r trustworthy hist, echo = FALSE}
+
+name = "Trustworthy"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+##### NoseWidth
+
+```{r nosewidth hist, echo = FALSE}
+
+name = "NoseWidth"
+mean_of_variable <- sapply(data_train[name], mean)
+minimum <- min(data_train[name])
+maximum <- max(data_train[name])
+standard_deviation <- sapply(data_train[name], sd)
+  
+plot_1 <- ggplot(data_train, aes_string(x = name)) +
+                 geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+                 theme_bw() + 
+                 labs(x = paste(name, 'regular')) +
+                 stat_function(fun = dnorm, args = list(mean = mean_of_variable, sd = standard_deviation), size = 1)
+  
+plot_2 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() + 
+          labs(x = paste(name, 'log transform')) + 
+          scale_x_log10() 
+  
+plot_3 <- data_train %>% ggplot(aes_string(x = name)) +
+          geom_histogram(aes(y = ..density..), fill = "dodgerblue1", bins = 100, alpha = 0.7) +
+          theme_bw() +
+          labs(x = paste(name, 'square root')) + 
+          scale_x_sqrt() 
+  
+cumulative_plot <- ggarrange(plot_1, plot_2, plot_3)
+print(cumulative_plot)
+```
+
+#### {-}
+
+All of them display more similarity to normal distribution after log transformation.
+
+## 3.2. Dependent Variable
+
+After taking a closer look, we can see that our dependent variable *Attractive* resembles a normal distribution. Good.
+
+```{r attractive dist, echo = FALSE}
+
+ggplot(data,aes(x = Attractive)) +
+  geom_histogram(fill = "dodgerblue1", bins = 100) +
+  theme_bw()
+
+ggplot(data,aes(x = log(Attractive + 1))) +
+  geom_histogram(fill = "dodgerblue1", bins = 100) +
+  theme_bw()
+
+ggplot(data,aes(x = sqrt(Attractive + 1))) +
+  geom_histogram(fill = "dodgerblue1", bins = 100) +
+  theme_bw()
+```
+
+There is no need to perform additional transformations.
+
+## 3.3. Predictors
+
+Let's apply the transformations to some of our variables that we selected earlier and delete unnecessary ones.
+
+```{r data transformation}
+
+data_train[c("Babyfaced", "Happy", "Sad", "Surprised", "Trustworthy", "NoseWidth")] <- log(data_train[c("Babyfaced", "Happy", "Sad", "Surprised", "Trustworthy", "NoseWidth")])
+
+data_test[c("Babyfaced", "Happy", "Sad", "Surprised", "Trustworthy", "NoseWidth")] <- log(data_test[c("Babyfaced", "Happy", "Sad", "Surprised", "Trustworthy", "NoseWidth")])
+```
+
+```{r variables deletion}
+
+data_train[c( "Masculine", "LuminanceMedian", "PupilTopAsymMetry", "PupilLipAsymmetry", "CheekboneProminence", "RaterN", "FemaleProb", "WhiteProb", "BlackProb", "LatinoProb", "MultiProb", "AsianProb", "OtherProb")] <- NULL
+
+data_test[c( "Masculine", "LuminanceMedian", "PupilTopAsymMetry", "PupilLipAsymmetry", "CheekboneProminence", "RaterN", "FemaleProb", "WhiteProb", "BlackProb", "LatinoProb", "MultiProb", "AsianProb", "OtherProb")] <- NULL
+```
+
+Before moving on, let's save our training and testing set.
+
+```{r save train/test data}
+
+save(list = c("data_train", "data_test"),
+     file = "data_train_test.RData")
+```
+
+# 4. Feature Selection
+
+The next step in development of our predictive model will be reducing the number of input variables by checking which of them are most highly correlated with the dependent variable. In order to do that we create the lists of numeric and categorical (2 in our case) variables.
+
+```{r features lists}
+
+data_numeric_vars <- sapply(data_train, is.numeric) %>% which() %>% names()
+data_numeric_vars
+
+data_categorical_vars <- sapply(data_train, is.factor) %>% which() %>% names()
+data_categorical_vars
+```
+
+## 4.1. Numerical Variables
+
+#### 4.1.1. Colinearity
+
+First, the correlation of the numeric variables will be explored. Let's perform a check for multicolinearity - if any of our variables are correlated with each other and should be dropped.
+
+```{r linear combos}
+
+data_linear_combinations <- findLinearCombos(data_train[, data_numeric_vars])
+variables <- c()
+for (item in data_linear_combinations$linearCombos){
+  print(names(data_train[, data_numeric_vars][item]))
+}
+names(data_train[, data_numeric_vars])[data_linear_combinations$remove]
+```
+
+However before we remove the suggested variables, let's inspect these correlations.
+
+```{r highly corr visualization}
+
+colinear_variables <- c("EyeWidthAvg", "EyeWidthR", "EyeWidthL"  
+,"PupilLipAvg", "PupilLipR", "PupilLipL", "CheeksAvg", "MidcheekChinR", "MidcheekChinL", "MidbrowHairlineAvg", "MidbrowHairlineR", "MidbrowHairlineL")
+correlations <- cor(data_train[,colinear_variables])
+corrplot(correlations)
+```
+
+We can see that all the cases of multicolinearity regard the same part of the face. We have high correlations in eye width, pupil to lip ratio, cheek characteristics and hairline. However, if we remove the suggested variable, we will still have another two very highly correlated variables. Let's go against the suggestions and keep the variables *EyeWidthAvg*, *PupilLipAvg*, *CheeksAvg*, *MidbrowHairlineAvg* and remove the other ones.
+
+```{r highlycorr removal}
+
+highly_correlated <- (c( "EyeWidthR", "EyeWidthL", "PupilLipR", "PupilLipL",  "MidcheekChinR", "MidcheekChinL", "MidbrowHairlineR", "MidbrowHairlineL"))
+
+data_train[c(highly_correlated)] <- NULL
+data_test[c(highly_correlated)] <- NULL
+```
+
+#### 4.1.2. Correlations
+
+Correlation explains how one or more variables are related to each other. It determines how attributes change in relation with the dependent variable which is extremely helpful in further feature selection. Let's see if we caught all highly correlated variables in the previous section. In order to choose the most correlated variables, regardless the correlation sign (positive or negative), we plotted the absolute values of those correlations.
+
+```{r data correlations, fig.height = 15, fig.width = 15, echo = FALSE, cache = TRUE}
+
+data_numeric_vars <- sapply(data_train, is.numeric) %>% which() %>% names()
+
+data_correlations <- abs(cor(data_train[,data_numeric_vars], use = "pairwise.complete.obs"))
+
+corrplot.mixed(data_correlations,
+               upper = "square",
+               lower = "number",
+               tl.col = "black",
+               tl.pos = "lt")
+```
+
+There is some high correlation among the *EyeHeight*, *EyeHeightR*, *EyeHeightL* and *EyeSize* and *EyeShape*. Let's take a closer look.
+
+```{r colinear vars, fig.height = 5, fig.width = 5, echo = FALSE, cache = TRUE}
+
+colinear_variables <- c("EyeHeightAvg", "EyeHeightR", "EyeHeightL", "EyeSize", "EyeShape")
+correlations <- cor(data_train[,colinear_variables])
+
+corrplot.mixed(correlations,
+               upper = "square",
+               lower = "number",
+               tl.col = "black",
+               tl.pos = "lt")
+```
+
+Let's keep *EyeHeightAvg* and *EyeShape*.
+
+```{r colinear removal}
+
+highly_correlated <- c( "EyeHeightR", "EyeHeightL", "EyeSize")
+data_train[c(highly_correlated)] <- NULL
+data_test[c(highly_correlated)] <- NULL
+```
+
+And we continue our exploration.
+
+```{r corrplot, fig.height = 15, fig.width = 15, echo = FALSE, cache = TRUE}
+
+data_numeric_vars <- sapply(data_train, is.numeric) %>% which() %>% names()
+
+data_correlations <- abs(cor(data_train[,data_numeric_vars], use = "pairwise.complete.obs"))
+corrplot(data_correlations)
+```
+
+This is a bit unreadable. Let's order the variables in relation to their correlation to our dependent variable.
+
+```{r correlations ordered, fig.height = 15, fig.width = 15, echo = FALSE, cache = TRUE}
+
+data_correlation_ordered <- data_correlations[,"Attractive"] %>% sort(decreasing = TRUE) %>% names()
+corrplot(data_correlations[data_correlation_ordered,data_correlation_ordered])
+```
+
+Let's see the mostly correlated variables - in our case the ones that show at least around 0.2 correlation with a dependent variable.
+
+```{r mixed positiv, fig.height = 15, fig.width = 15, echo = FALSE, cache = TRUE}
+
+corrplot.mixed(data_correlations[data_correlation_ordered[1:15],
+                                 data_correlation_ordered[1:15]],
+                                 upper = "square",
+                                 lower = "number",
+                                 tl.col = "black",
+                                 tl.pos = "lt")
+```
+
+Fortunately we don't have too high correlations with our dependent variable. Let's see the relation of the target variable with 5 most correlated variables.
+
+#### Mostly Correlated {.tabset .tabset-pills}
+
+##### Trustworthy
+
+```{r plot thrustworhty, echo = FALSE, cache = TRUE}
+
+plot <- ggplot(data_train, aes_string(x = "Trustworthy", y = "Attractive")) +
+               geom_point(col = "dodgerblue1") +
+               geom_smooth(method = "lm", se = FALSE, col = "dodgerblue1") +
+               theme_bw()
+show(plot)
+```
+
+##### Happy
+
+```{r plot happy, echo = FALSE, cache = TRUE}
+
+plot <- ggplot(data_train,aes_string(x = "Happy", y = "Attractive")) +
+               geom_point(col = "dodgerblue1") +
+               geom_smooth(method = "lm", se = FALSE, col = "dodgerblue1") +
+               theme_bw()
+show(plot)
+```
+
+##### Threatening
+
+```{r plot eyeheightavg, echo = FALSE, cache = TRUE}
+
+plot <- ggplot(data_train,aes_string(x = "Threatening", y = "Attractive")) +
+               geom_point(col = "dodgerblue1") +
+               geom_smooth(method = "lm", se = FALSE, col = "dodgerblue1") +
+               theme_bw()
+show(plot)
+```
+
+##### ChinLength
+
+```{r plot chinlength, echo = FALSE, cache = TRUE}
+
+plot <- ggplot(data_train,aes_string(x = "ChinLength", y = "Attractive")) +
+               geom_point(col = "dodgerblue1") +
+               geom_smooth(method = "lm", se = FALSE, col = "dodgerblue1") +
+               theme_bw()
+show(plot)
+```
+
+##### Sad
+
+```{r plot eyeheightl, echo = FALSE, cache = TRUE}
+
+plot <- ggplot(data_train,aes_string(x = "Sad", y = "Attractive")) +
+               geom_point(col = "dodgerblue1") +
+               geom_smooth(method = "lm", se = FALSE, col = "dodgerblue1") +
+               theme_bw()
+show(plot)
+```
+
+#### {-}
+
+As it is visible on the graphs, two mostly correlated variables display a positive correlation with our dependent variable. The next three predictors are strongly negatively correlated.
+
+## 4.2. Categorical Variables
+
+Now let's check the relationship of categorical predictors with the target variable. Our dependent variable is quantitative and predictors are qualitative, so we can use ANOVA to check their relation with dependent variable.
+
+#### 4.2.1. Ethnicity
+
+```{r anova ethnicity}
+
+anova_ethnicity <- aov(data_train$Attractive ~ data_train$EthnicitySelf) 
+summary(anova_ethnicity)
+```
+
+The *EthnicitySelf* variable yielded a p-value of 0.288. This means we cannot reject the null hypothesis, that the variable is significant and we can drop it. Additionally, if you look at their boxplots, you will see that the attractiveness scores are very similar for all four ethnicities which is also confirmed by their mean value.
+
+```{r mean ethnicity}
+
+data_train %>% select(Attractive, EthnicitySelf) %>% group_by(EthnicitySelf) %>% 
+  summarise(mean(Attractive))
+```
+
+```{r boxplot ethnicity}
+
+ggplot(data_train, aes(x = EthnicitySelf, y = Attractive, fill = EthnicitySelf)) +
+  geom_boxplot(alpha = 0.6)  +
+  scale_fill_manual(values = c("#94D4FF", "#4FB0FF", "#1F8FFF", "#3079D1"))
+```
+
+#### 4.2.2. Gender
+
+```{r anova gender}
+
+anova_gender <- aov(data_train$Attractive ~ data_train$GenderSelf)
+summary(anova_gender)
+```
+
+As we can see p-value of the F statistic obtains very low value for GenderSelf, so we can definitely reject the null hypothesis - variable *GenderSelf* impacts *Attractive*. The scores differ greatly, by roughly 0.5 on a scale of 5, that is a huge difference.
+
+```{r boxplot gender}
+
+ggplot(data_train, aes(x = GenderSelf, y = Attractive, fill = GenderSelf)) +
+  geom_boxplot(alpha = 0.6)  +
+  scale_fill_manual(values = c("#94D4FF", "#1F8FFF"))
+```
+
+Finally, we will remove *EthnicitySelf* and keep the *GenderSelf* variable.
+
+```{r ethnicity deletion}
+
+data_train$EthnicitySelf <- NULL
+data_test$EthnicitySelf <- NULL
+```
+
+## 4.3. Diversity
+
+Next step would be to identify low-varying variables. As visible below the frequency ratio for most of the variables takes value close to 1 which implies that they are diversified, none of them show low variance.
+
+```{r nearzerovar}
+
+nearZeroVar(data_train, saveMetrics = TRUE)
+```
+
+## 4.4. Final Selection
+
+For modeling we will be using two sets of data - the 20 most correlated numeric variables with added variable *GenderSelf* and all the variables from the dataset.
+
+```{r final selection}
+
+selected_variables <- data_correlation_ordered[1:21]
+selected_variables <- append(selected_variables, c("GenderSelf"))
+
+data_train_high <- data_train[selected_variables]
+data_test_high <- data_test[selected_variables]
+```
+
+Let's save the list of selected variables as well.
+
+```{r save selected}
+
+save(list = "selected_variables",
+     file = "selected_variables.RData")
+```
+
+# 5. Modeling
+
+Before estimating the models we will create a function that will help us present the results in a more convenient and clear way. The function will visualize the values predicted by the model and compare them with the real data.
+
+```{r visualization function}
+
+visualize <- function(model){
+  predicted_values <- predict(model)
+  
+plot_1 <- ggplot(data.frame(error = data_train$Attractive - predicted_values), aes(x = error))   + geom_histogram(fill = "dodgerblue1", bins = 100) +
+   theme_bw()
+
+plot_2 <- ggplot(data.frame(real = data_train$Attractive, predicted = predicted_values), aes(x = predicted, y = real)) +
+                 geom_point(col = "dodgerblue1") +
+                 theme_bw() 
+
+print(ggarrange(plot_1, plot_2))
+
+cor(data_train$Attractive,
+    predicted_values)
+}
+```
+
+## 5.1 Estimating All Models
+
+The models tested below:
+
+* Linear regression model with highly correlated variables
+* Linear regression model with all variables
+* Linear model with backward elimination based on p-value with highly correlated variables
+* Linear model with backward elimination based on p-value with all variables
+* Ridge regression model with highly correlated variables
+* Ridge regression model with all variables
+* LASSO regression model with highly correlated variables
+* LASSO regression model with all variables
+* Elastic Net model with highly correlated variables
+* Elastic Net model with all variables
+
+```{r simple regression, cache = TRUE, echo = TRUE, include = TRUE, results = 'hide'}
+
+faces_lm1 <- lm(Attractive ~ ., 
+                 data = data_train_high)
+
+faces_lm2 <- lm(Attractive ~ .,
+                data = data_train)
+
+faces_lm1_backward_p_value <- ols_step_backward_p(faces_lm1,prem = 0.05, progress = TRUE)
+
+faces_lm2_backward_p_value <- ols_step_backward_p(faces_lm2,prem = 0.05, progress = TRUE)
+
+options(contrasts = c("contr.treatment", "contr.treatment"))
+
+ctrl_cv7 <- trainControl(method = "cv", number = 7)
+parameters_ridge <- expand.grid(alpha = 0, lambda  = seq(10, 1e4, 10))
+
+faces_ridge_1 <- train(Attractive ~ .,
+                        data = data_train_high,
+                        method = "glmnet",
+                        tuneGrid = parameters_ridge,
+                        trControl = ctrl_cv7)
+
+faces_ridge_2 <- train(Attractive ~ .,
+                        data = data_train,
+                        method = "glmnet",
+                        tuneGrid = parameters_ridge,
+                        trControl = ctrl_cv7)
+
+lambdas <- exp(log(10)*seq(-2, 9, length.out = 200))
+parameters_lasso <- expand.grid(alpha = 1, lambda = lambdas)
+
+faces_lasso_1 <- 
+  train(Attractive ~ .,
+                       data = data_train_high,
+                       method = "glmnet", 
+                       tuneGrid = parameters_lasso,
+                       trControl = ctrl_cv7)
+
+faces_lasso_2 <- 
+  train(Attractive ~ .,
+                       data = data_train,
+                       method = "glmnet", 
+                       tuneGrid = parameters_lasso,
+                       trControl = ctrl_cv7)
+
+parameters_elastic <- expand.grid(alpha = seq(0, 1, 0.2), lambda = seq(0, 1e2, 1))
+
+faces_elastic_1 <- train(Attractive ~ .,
+                        data = data_train_high,
+                        method = "glmnet", 
+                        tuneGrid = parameters_elastic,
+                        trControl = ctrl_cv7)
+
+faces_elastic_2 <- train(Attractive ~ .,
+                        data = data_train,
+                        method = "glmnet", 
+                        tuneGrid = parameters_elastic,
+                        trControl = ctrl_cv7)
+
+model_list <- list(faces_lm1, faces_lm2, faces_lm1_backward_p_value$model, 
+                faces_lm2_backward_p_value$model,
+                faces_ridge_1, faces_ridge_2, faces_lasso_1, faces_lasso_2,
+                faces_elastic_1, faces_elastic_2)
+
+model_names <- c("linear_regression_high", "linear_regression_all",
+                 "OLS_high", "OLS_all",
+                "ridge_high", "ridge_all", "lasso_high", "lasso_all",
+                "elastic_net_high", "elastic_net_all")
+```
+
+## 5.2. Visualization
+
+We calculated predicted values based on all models. Now, we will visualise those values versus the real ones and check the distribution of errors.
+
+#### Linear Regression {.tabset .tabset-fade} 
+
+##### Selected Variables
+
+```{r, echo = FALSE}
+
+visualize(faces_lm1)
+```
+
+##### All Variables
+
+```{r, echo = FALSE}
+
+visualize(faces_lm2)
+```
+
+#### {-}
+
+#### OLS Backstepping {.tabset .tabset-fade}
+
+##### Selected Variables
+
+```{r, echo = FALSE}
+
+visualize(faces_lm1_backward_p_value$model)
+```
+
+##### All Variables
+
+```{r, echo = FALSE}
+
+visualize(faces_lm2_backward_p_value$model)
+```
+
+#### {-}
+
+#### Ridge Regression {.tabset .tabset-fade}
+
+##### Selected Variables
+
+```{r, echo = FALSE}
+
+visualize(faces_ridge_1)
+```
+
+##### All Variables
+
+```{r, echo = FALSE}
+
+visualize(faces_ridge_2)
+```
+
+#### {-}
+
+#### LASSO Regression {.tabset .tabset-fade}
+
+##### Selected Variables
+
+```{r, echo = FALSE}
+
+visualize(faces_lasso_1)
+```
+
+##### All Variables
+
+```{r, echo = FALSE}
+
+visualize(faces_lasso_2)
+```
+
+#### {-}
+
+#### Cross Validation Elastic Net {.tabset .tabset-fade}
+
+##### Selected Variables
+
+```{r, echo = FALSE}
+
+visualize(faces_elastic_1)
+```
+
+##### All Variables
+
+```{r, echo = FALSE}
+
+visualize(faces_elastic_2)
+```
+
+#### {-}
+
+# 6. Evaluation
+
+Here we define a function regression metrics, that will show us the performance of our models.
+
+```{r regression metrics}
+
+regressionMetrics <- function(real, predicted) {
+  MSE <- mean((real - predicted)^2)
+  RMSE <- sqrt(MSE)
+  MAE <- mean(abs(real - predicted))
+  MAPE <- mean(abs(real - predicted)/real)
+  MedAE <- median(abs(real - predicted))
+  MSLE <- mean((log(1 + real) - log(1 + predicted))^2)
+  TSS <- sum((real - mean(real))^2)
+  RSS <- sum((predicted - real)^2)
+  R2 <- 1 - RSS/TSS
+  
+  result <- data.frame(MSE, RMSE, MAE, MAPE, MedAE, MSLE, R2)
+  return(result)
+}
+```
+
+We check the parameters of all estimated models and compare them. The investigated parameters:
+
+* MSE - mean square error - tells us how close a regression line is to the observations
+* RMSE - root mean square error - standard deviation of the residuals
+* MAE - mean absolute error - measure of errors between paired observations
+* MAPE - mean absolute percentage error - expresses the accuracy as a ratio
+* MedAE - median absolute error - calculated by taking the median of all absolute differences between the target and the prediction
+* MSLE - mean squared logarithmic error - squared difference between the log of the predictions and log of actual values
+* R2 - R squared - proportion of the variance for a dependent variable that's explained by an independent variables
+
+```{r results all models}
+
+results_dataframe <- data.frame()
+for (item in model_list){
+  results <- regressionMetrics(data_test$Attractive,
+                               predict(item, data_test))
+  results_dataframe <- rbind(results_dataframe, results)
+}
+row.names(results_dataframe) <- model_names
+results_dataframe
+```
+
+We get the best results from the LASSO regression model set on all the variables. Let's visualize the errors in our predictions from that model.
+
+```{r, fig.height = 10, fig.width = 5, fig.align = 'center'}
+
+par(mfrow=c(3,1))
+errors <- abs(predict(faces_lasso_2, data_test) - data_test$Attractive)
+plot(abs(predict(faces_lasso_2, data_test) - data_test$Attractive),
+     main = "magnitude of the errors",
+     ylab = 'error', pch = 19)
+hist(errors, breaks = 100)
+plot(ecdf(errors))
+```
+
+If we look at the magnitude of errors, we can see that very few surpassed 1, and a staggering majority stayed between the range 0 to 0.5. If we direct our attention to the density function of the errors, we can see that 80% of the errors were 0.5 or lower, which means that with our model we are able to predict rather accurately someone's attractiveness, with only a few outlier exceptions.
+
+# 7. Results and Conclusions
+
+Final coefficients for variables in the LASSO model:
+
+```{r final model, echo = FALSE}
+
+predict(faces_lasso_2$finalModel,
+        s = faces_lasso_2$bestTune$lambda,
+        type = "coefficients")
+```
+
+From all the available variables, 21 were selected for the model estimation and 10 different models were evaluated. From all of the estimated models, LASSO regression with all variables yielded the best results. We obtained R2 at the level of 67.48% and mean square error of 18.58%. The second best model turned out to be the cross validation elastic net model with all variables. The worst performance was displayed by ridge regression model and it obtained around two times worse results than the rest of the models.
+
+The important thing that we learned from this project is also the fact that you cannot always trust the statistical estimates or results generated by a specific test, sometimes you need an intuition and a good knowledge of your data to make decisions and obtain the best results.
+
+# 8. Sources
+
+1. https://chicagofaces.org/default/
+
+2. https://www.analyticsvidhya.com/blog/2020/04/feature-scaling-machine-learning-normalization-standardization/
+
+3. https://medium.com/analytics-vidhya/what-is-multicollinearity-and-how-to-remove-it-413c419de2f
+
+4. https://www.rdocumentation.org/packages/regclass/versions/1.6/topics/VIF
