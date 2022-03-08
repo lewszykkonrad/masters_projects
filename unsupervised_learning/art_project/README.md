@@ -1,3 +1,3 @@
-![](pictures/the_fighting_temaraire,jpg)
+![](pictures/the_fighting_temaraire.jpg)
 
 # Art project
