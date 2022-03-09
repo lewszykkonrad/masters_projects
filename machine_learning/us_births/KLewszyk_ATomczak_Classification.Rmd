@@ -3,7 +3,7 @@ title: "US Births - Classification"
 author: "Aleksandra Tomczak, Konrad Lewszyk"
 date: "5/25/2021"
 output: 
-  html_document: 
+  github document: 
     theme: journal
     toc: yes
     toc_float:
