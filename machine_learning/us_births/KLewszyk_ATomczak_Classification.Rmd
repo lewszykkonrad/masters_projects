@@ -4,6 +4,7 @@ author: "Aleksandra Tomczak, Konrad Lewszyk"
 date: "5/25/2021"
 output: 
   github document: 
+    keep_md: true
     theme: journal
     toc: yes
     toc_float:
