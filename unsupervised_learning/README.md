@@ -5,4 +5,4 @@ These projects focused on unsupervised learning. There were three projects in to
   * clustering performed on images 
   * and dimension reduction performed on images
           
- 2. in the assoc
+ 2. in the movie recommendations you will find an association 
