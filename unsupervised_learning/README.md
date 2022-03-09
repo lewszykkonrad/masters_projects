@@ -5,4 +5,4 @@ These projects focused on unsupervised learning. There were three projects in to
   * clustering performed on images 
   * and dimension reduction performed on images
           
- 2. in the movie recommendations you will find an association 
+ 2. in the movie recommendations you will find an association rule mining project. The aim of the project was to recommend movies based on bundles of movies one has seen.
