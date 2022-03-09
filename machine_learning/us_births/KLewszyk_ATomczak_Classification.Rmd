@@ -4,8 +4,6 @@ author: "Aleksandra Tomczak, Konrad Lewszyk"
 date: "5/25/2021"
 output: 
   html_document: 
-    keep_md: true
-    self_contained: true
     theme: journal
     toc: yes
     toc_float:
